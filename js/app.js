@@ -10,6 +10,15 @@
   const AUTO_REFRESH_MS = 10 * 60 * 1000;
   const RATES_MAX_AGE_MS = 12 * 60 * 60 * 1000;
   const SYNC_DEBOUNCE_MS = 2500;
+  const HISTORY_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+  const RANGES = [
+    { id: '1w', label: '1W', days: 7 },
+    { id: '1m', label: '1M', days: 30 },
+    { id: '3m', label: '3M', days: 91 },
+    { id: 'ytd', label: 'YTD' },
+    { id: '1y', label: '1Y', days: 365 },
+    { id: 'all', label: 'All' },
+  ];
 
   const SUBCATEGORY_HINTS = {
     stock: ['Common stock', 'Dividend stock', 'ADR', 'Employee shares (RSU)'],
@@ -40,10 +49,11 @@
     savedAt: null,
     shared: { baseCurrency: 'USD', updatedAt: '' },               // synced
     keys: { finnhub: '', twelvedata: '', alphavantage: '', pokemontcg: '' },
-    device: { theme: 'system', autoRefresh: true, syncKeys: false, syncToken: '', gistId: '', lastSync: null },
+    device: { theme: 'dark', autoRefresh: true, syncKeys: false, syncToken: '', gistId: '', lastSync: null, darkDefault: true },
     rates: null,          // { rates: {EUR: 0.92, ...}, fetchedAt }
+    histories: {},        // device cache: { cacheKey: { fetchedAt, points: [{date, price}] | null, error } }
     lastRefresh: null,
-    ui: { sort: 'value', asc: false, search: '', category: 'all', range: 0, showClosed: false, detailsId: null },
+    ui: { sort: 'value', asc: false, search: '', category: 'all', range: '1y', mode: 'value', showClosed: false, detailsId: null },
   };
 
   const nowISO = () => new Date().toISOString();
@@ -62,10 +72,18 @@
       state.savedAt = saved.savedAt || null;
       state.rates = saved.rates || null;
       state.lastRefresh = saved.lastRefresh || null;
+      state.histories = saved.histories || {};
+      if (saved.ui) {
+        if (RANGES.some((r) => r.id === saved.ui.range)) state.ui.range = saved.ui.range;
+        if (saved.ui.mode === 'return') state.ui.mode = 'return';
+      }
       if (saved.version >= 2) {
         Object.assign(state.shared, saved.shared);
         Object.assign(state.keys, saved.keys);
+        const hadDarkDefault = saved.device && saved.device.darkDefault;
         Object.assign(state.device, saved.device);
+        // Dark became the default; switch anyone still on the old default once.
+        if (!hadDarkDefault) state.device = { ...state.device, theme: 'dark', darkDefault: true };
       } else if (saved.settings) {
         // v1 kept everything in one settings object
         state.keys.finnhub = saved.settings.finnhubKey || '';
@@ -83,7 +101,8 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         version: 2, holdings: state.holdings, deleted: state.deleted, snapshots: state.snapshots,
         savedAt: state.savedAt, shared: state.shared, keys: state.keys, device: state.device,
-        rates: state.rates, lastRefresh: state.lastRefresh,
+        rates: state.rates, lastRefresh: state.lastRefresh, histories: state.histories,
+        ui: { range: state.ui.range, mode: state.ui.mode },
       }));
     } catch (err) {
       console.warn('Could not save data', err);
@@ -215,11 +234,17 @@
       : fmt.money(n, cur)),
     signedMoney: (n, cur) => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt.money(Math.abs(n), cur),
     pct: (n) => (n === null ? '—' : (n * 100).toFixed(Math.abs(n) < 0.1 ? 1 : 0) + '%'),
-    signedPct: (n) => (n === null ? '' : (n > 0 ? '+' : n < 0 ? '−' : '') + (Math.abs(n) * 100).toFixed(1) + '%'),
+    signedPct: (n) => {
+      if (n === null) return '';
+      const t = (Math.abs(n) * 100).toFixed(1);
+      return (Number(t) === 0 ? '' : n > 0 ? '+' : '−') + t + '%';
+    },
     compact: (n) => currencyFmt(base(), { notation: 'compact', maximumFractionDigits: 1 }).format(n),
     qty: (n) => nf('qty', () => new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 })).format(n),
     shortDate: (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     longDate: (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }),
+    monthYear: (d) => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
+    axisPct: (n) => (n > 0 ? '+' : '') + (Math.abs(n) >= 0.1 || n === 0 ? Math.round(n * 100) : (n * 100).toFixed(1)) + '%',
     ago: (iso) => {
       if (!iso) return 'never';
       const mins = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -294,23 +319,140 @@
       : '';
 
     renderAllocation($('#allocation'), s.allocation, fmt);
-    renderHistory($('#history'), historyPoints(), state.ui.range, fmt);
+    renderPerformance();
     renderFilterOptions(s);
     renderTable(s);
     if (state.lastRefresh && !refreshing) setStatus(`Prices updated ${fmt.ago(state.lastRefresh)}`);
     if (state.ui.detailsId) renderDetails();
   }
 
-  /** Snapshots expressed in the current base currency. */
-  function historyPoints() {
-    return state.snapshots
-      .map((sn) => {
-        const cur = sn.currency || 'USD';
-        const value = convert(sn.value, cur, base());
-        const cost = convert(sn.cost || 0, cur, base());
-        return value === null ? null : { ...sn, value, cost };
-      })
-      .filter(Boolean);
+  // ---------- performance chart ----------
+  const histKey = (h) => [h.priceSource, h.priceKey, h.currency, h.unit].join('|');
+
+  /** Market history per holding id, in holding currency, from the device cache. */
+  function historiesById() {
+    const out = {};
+    for (const h of state.holdings) {
+      const c = state.histories[histKey(h)];
+      if (c && c.points) out[h.id] = c.points;
+    }
+    return out;
+  }
+
+  function rangeStart(id, first) {
+    const r = RANGES.find((x) => x.id === id);
+    if (id === 'all') return first;
+    if (id === 'ytd') return today().slice(0, 4) + '-01-01';
+    return P.addDays(today(), -r.days);
+  }
+
+  let histMemo = { key: null, value: null };
+  function fullHistory() {
+    // Rebuilding is cheap, but render() runs on every keystroke in search.
+    const key = state.savedAt + '|' + base() + '|' + (state.rates && state.rates.fetchedAt) + '|' + historyVersion;
+    if (histMemo.key !== key) {
+      histMemo = {
+        key,
+        value: P.buildHistory(state.holdings, { histories: historiesById(), convert, base: base(), end: today() }),
+      };
+    }
+    return histMemo.value;
+  }
+
+  function renderPerformance() {
+    const { points } = fullHistory();
+    const first = points.length ? points[0].date : today();
+    const cls = (n) => (Math.abs(n) < 0.0005 ? '' : n > 0 ? 'gain' : 'loss');
+
+    // Period chips double as the range selector.
+    $('#range').innerHTML = RANGES.map((r) => {
+      const from = rangeStart(r.id, first);
+      const ch = from >= first || r.id === 'all' ? P.periodChange(points, from) : null;
+      const v = ch ? `<span class="p-value ${cls(ch.pct)}">${fmt.signedPct(ch.pct)}</span>` : '<span class="p-value none">—</span>';
+      return `<button data-range="${r.id}" class="${r.id === state.ui.range ? 'active' : ''}"
+        title="${ch ? fmt.signedMoney(ch.gain) + ' since ' + fmt.longDate(ch.from) : 'Not enough history'}">
+        <span class="p-label">${r.label}</span>${v}</button>`;
+    }).join('');
+
+    const from = rangeStart(state.ui.range, first);
+    const slice = points.filter((p) => p.date >= from);
+    const perf = P.performance(slice).map((p, i) => ({ ...slice[i], ...p }));
+    const last = perf[perf.length - 1];
+    const label = RANGES.find((r) => r.id === state.ui.range).label;
+    $('#perf-headline').innerHTML = perf.length > 1
+      ? `<b class="${cls(last.pct)}">${fmt.signedPct(last.pct)}</b> · <span class="${cls(last.gain)}">${fmt.signedMoney(last.gain)}</span> · ${label === 'All' ? 'all time' : label}`
+      : '';
+    document.querySelectorAll('#chart-mode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === state.ui.mode));
+    $('#chart-legend').hidden = state.ui.mode !== 'value' || perf.length < 2;
+    renderHistory($('#history'), perf, {
+      mode: state.ui.mode, fmt,
+      emptyText: points.length ? 'Not enough history in this range yet.' : 'Add a transaction to see your history.',
+    });
+
+    const est = P.buildHistory(state.holdings, { histories: historiesById(), convert, base: base(), start: from, end: today() }).estimated;
+    const note = [];
+    if (historyStatus) note.push(historyStatus);
+    if (est.length) {
+      note.push(`Estimated between known prices for ${est.length <= 3 ? est.join(', ') : est.slice(0, 3).join(', ') + ` and ${est.length - 3} more`}` +
+        ' (no free price history for them).');
+    }
+    note.push('Return % excludes money added or withdrawn.');
+    $('#chart-note').textContent = note.join(' ');
+  }
+
+  // ---------- price history download ----------
+  let historyVersion = 0;
+  let historyStatus = '';
+  let fetchingHistory = false;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function refreshHistories(force) {
+    if (fetchingHistory || !navigator.onLine) return;
+    const settings = { keys: state.keys };
+    const todo = [];
+    const seen = new Set();
+    for (const h of state.holdings) {
+      const key = histKey(h);
+      if (seen.has(key) || !h.transactions.length || !Prices.historySource(h, settings)) continue;
+      seen.add(key);
+      const c = state.histories[key];
+      if (!force && c && Date.now() - Date.parse(c.fetchedAt) < HISTORY_MAX_AGE_MS) continue;
+      todo.push(h);
+    }
+    if (!todo.length) return;
+    fetchingHistory = true;
+    // Free tiers allow only a few requests a minute, so fetch one at a time.
+    const gap = { coingecko: 2500, twelvedata: 8000, alphavantage: 15000 };
+    const limited = new Set();
+    try {
+      for (let i = 0; i < todo.length; i++) {
+        const h = todo[i];
+        const kind = Prices.historySource(h, settings).kind;
+        if (limited.has(kind)) continue;
+        historyStatus = `Loading price history ${i + 1}/${todo.length}…`;
+        renderPerformanceSafe();
+        try {
+          const points = await Prices.fetchHistory(h, {
+            settings, rates: state.rates && state.rates.rates, fetchFn: fetch.bind(window), days: 365,
+          });
+          state.histories[histKey(h)] = { fetchedAt: nowISO(), points };
+        } catch (err) {
+          if (/429/.test(err.message)) limited.add(kind);
+          else state.histories[histKey(h)] = { fetchedAt: nowISO(), points: null, error: err.message };
+        }
+        historyVersion++;
+        if (i < todo.length - 1) await sleep(gap[kind] || 2000);
+      }
+    } finally {
+      fetchingHistory = false;
+      historyStatus = limited.size ? 'Some price history is rate-limited; it will load on a later refresh.' : '';
+      persist();
+      renderPerformanceSafe();
+    }
+  }
+
+  function renderPerformanceSafe() {
+    if (state.holdings.length && !$('#dashboard').hidden) renderPerformance();
   }
 
   function renderFilterOptions(s) {
@@ -432,6 +574,7 @@
       refreshing = false;
       btn.disabled = false;
     }
+    refreshHistories();
   }
 
   // ---------- add / edit holding dialog ----------
@@ -588,6 +731,9 @@
     if (errors.length) {
       $('#form-errors').textContent = errors.join(' ');
       return;
+    }
+    if (holding.priceSource === 'manual' && priceTyped && priceChanged && holding.currentPrice > 0) {
+      holding.valuations = P.addValuation(holding, today(), holding.currentPrice);
     }
     state.holdings = existing
       ? state.holdings.map((h) => (h.id === holding.id ? holding : h))
@@ -767,6 +913,9 @@
       h.currentPrice = tx.price;
       h.priceUpdatedAt = nowISO();
     }
+    if (h.priceSource === 'manual' && tx.type !== 'income' && tx.price > 0) {
+      h.valuations = P.addValuation(h, tx.date, tx.price);
+    }
     touch(h);
     commit();
     txDialog.close();
@@ -898,18 +1047,11 @@
   // ---------- sample data ----------
   async function loadSample() {
     state.holdings = P.sampleHoldings();
+    state.snapshots = [];
     await refreshRates(false);
-    // A gently rising illustrative history so the chart has something to show.
-    const s = P.summarize(state.holdings, convert, base());
-    let snaps = [];
-    let v = s.value * 0.82;
-    for (let i = 180; i >= 1; i--) {
-      v += (s.value - v) / (i + 8) + (Math.sin(i / 6) + Math.cos(i / 17)) * s.value * 0.004;
-      snaps = P.recordSnapshot(snaps, new Date(Date.now() - i * 86400000).toISOString(), v, s.cost, base());
-    }
-    state.snapshots = snaps;
     commit();
     render();
+    refreshHistories();
   }
 
   // ---------- events ----------
@@ -941,16 +1083,21 @@
   $('#range').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-range]');
     if (!b) return;
-    state.ui.range = Number(b.dataset.range);
-    document.querySelectorAll('#range button').forEach((x) => x.classList.toggle('active', x === b));
-    renderHistory($('#history'), historyPoints(), state.ui.range, fmt);
+    state.ui.range = b.dataset.range;
+    persist();
+    renderPerformance();
+  });
+  $('#chart-mode').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (!b) return;
+    state.ui.mode = b.dataset.mode;
+    persist();
+    renderPerformance();
   });
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      if (state.holdings.length) renderHistory($('#history'), historyPoints(), state.ui.range, fmt);
-    }, 150);
+    resizeTimer = setTimeout(renderPerformanceSafe, 150);
   });
   // Pull changes from other devices whenever the app comes back to the foreground.
   document.addEventListener('visibilitychange', () => {
@@ -970,6 +1117,7 @@
     else {
       await refreshRates(false);
       if (state.holdings.length) { commit(); render(); }
+      refreshHistories();
     }
   })();
 

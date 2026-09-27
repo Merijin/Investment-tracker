@@ -38,12 +38,25 @@ an app, works offline, and syncs between devices through a private GitHub Gist.
 - **Cloud sync** between computer and phone through a private GitHub Gist. Changes merge
   per holding and per transaction, so edits made offline on two devices are both kept.
 - **Installable app (PWA)**: add it to your home screen and it opens full-screen, even offline.
-- A dashboard with total value, unrealized and realized gains, allocation by asset class, and a
-  value-over-time chart built from a daily snapshot.
+- **Performance chart.** Your portfolio's value is rebuilt for every day from your transactions
+  and downloaded daily price history. It can show:
+  - **Value**, with the amount invested as a dashed line.
+  - **Return %**, a time-weighted return, so money you add or withdraw doesn't count as gain.
+
+  Period chips show the % change for 1W, 1M, 3M, YTD, 1Y and all time, and tapping one sets the
+  chart's range. Price history comes from:
+  - **Crypto:** CoinGecko (last 365 days).
+  - **Gold and silver:** PAXG and KAG tokens on CoinGecko.
+  - **Stocks and ETFs:** Twelve Data or Alpha Vantage, if you've added a key. Finnhub's free tier
+    has no history.
+
+  Where no history exists (collectibles, manual items, older dates), values are estimated between
+  your trade prices and dated manual valuations, and the chart says which holdings are estimated.
+- A dashboard with total value, unrealized and realized gains, and allocation by asset class.
+- Dark mode by default. Light and match-system are available in Settings.
 - A holdings table you can sort, search and filter. On phones it switches to a card layout.
 - JSON backup and restore, plus CSV export of holdings and of all transactions. API keys are
   never written to backups.
-- Light and dark themes.
 
 ## Use it on your phone
 
@@ -108,7 +121,7 @@ number-crunching, which a portfolio tracker doesn't need.
 ## Limitations and ideas
 
 - Cost basis uses the average-cost method. FIFO/LIFO tax lots could be added as an option.
-- Realized gains from foreign-currency holdings are converted at today's exchange rate, not the
-  rate on the day of the sale.
+- Realized gains from foreign-currency holdings, and past prices in the performance chart, are
+  converted at today's exchange rate rather than the historical rate.
 - Free API tiers have rate limits. Crypto is fetched in a single batched request to stay under
   CoinGecko's limit.

@@ -123,6 +123,13 @@
       priceError: raw.priceError || null,
       notes: String(raw.notes || '').trim(),
       transactions,
+      // Dated manual valuations, so a manually priced asset has a price history too.
+      valuations: Array.isArray(raw.valuations)
+        ? raw.valuations
+          .filter((v) => v && /^\d{4}-\d{2}-\d{2}$/.test(v.date) && Number.isFinite(Number(v.price)))
+          .map((v) => ({ date: v.date, price: Number(v.price) }))
+          .sort((a, b) => (a.date < b.date ? -1 : 1))
+        : [],
       createdAt: raw.createdAt || new Date().toISOString(),
       updatedAt: raw.updatedAt || new Date().toISOString(),
     };
@@ -360,6 +367,163 @@
     return { holdings, snapshots, skipped: list.length - holdings.length };
   }
 
+
+  // ---------- history & performance ----------
+
+  const DAY_MS = 86400000;
+  const addDays = (date, n) => new Date(Date.parse(date + 'T00:00:00Z') + n * DAY_MS).toISOString().slice(0, 10);
+
+  /** Money moving into (+) or out of (−) the portfolio because of a transaction. */
+  function cashFlow(t) {
+    if (t.type === 'buy') return t.quantity * t.price + t.fees;
+    if (t.type === 'sell') return -(t.quantity * t.price - t.fees);
+    return -(t.amount - t.fees); // income is paid out, so it counts as a return
+  }
+
+  /** Record a dated manual valuation (one per day, latest wins). */
+  function addValuation(h, date, price) {
+    const rest = (h.valuations || []).filter((v) => v.date !== date);
+    return [...rest, { date, price }].sort((a, b) => (a.date < b.date ? -1 : 1));
+  }
+
+  /**
+   * Daily price function for one holding, in its own currency.
+   * `series` (fetched market history) wins where it exists; elsewhere the price
+   * is interpolated between known points: trade prices, manual valuations and
+   * today's price. Returns { priceOn(date), estimated } where `estimated` says
+   * whether any part of the range relies on interpolation.
+   */
+  function priceModel(h, series, today) {
+    if (h.priceSource === 'cash') return { priceOn: () => 1, estimated: false };
+    const anchors = new Map();
+    for (const t of h.transactions) if (t.type !== 'income' && t.price > 0) anchors.set(t.date, t.price);
+    for (const v of h.valuations || []) anchors.set(v.date, v.price);
+    if (h.currentPrice > 0) anchors.set(today, h.currentPrice);
+    const market = (series || []).filter((p) => p.price > 0);
+    const marketStart = market.length ? market[0].date : null;
+    // Before market history starts, estimate towards its first price so the line joins up.
+    if (marketStart) {
+      for (const d of [...anchors.keys()]) if (d >= marketStart) anchors.delete(d);
+      anchors.set(marketStart, market[0].price);
+    }
+    const known = [...anchors.entries()].map(([date, price]) => ({ date, price })).sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    function interpolate(date) {
+      if (!known.length) return 0;
+      if (date <= known[0].date) return known[0].price;
+      for (let i = 1; i < known.length; i++) {
+        if (date <= known[i].date) {
+          const a = known[i - 1], b = known[i];
+          const span = Date.parse(b.date) - Date.parse(a.date);
+          const f = span > 0 ? (Date.parse(date) - Date.parse(a.date)) / span : 1;
+          return a.price + (b.price - a.price) * f;
+        }
+      }
+      return known[known.length - 1].price;
+    }
+
+    let mi = 0;
+    let lastDate = '';
+    function priceOn(date) {
+      if (marketStart && date >= marketStart) {
+        if (date < lastDate) mi = 0; // allow restarting from the beginning
+        lastDate = date;
+        while (mi + 1 < market.length && market[mi + 1].date <= date) mi++;
+        // After the last market point, use today's price for today.
+        if (date === today && h.currentPrice > 0) return h.currentPrice;
+        return market[mi].price;
+      }
+      return interpolate(date);
+    }
+    return { priceOn, estimated: !marketStart, marketStart };
+  }
+
+  /**
+   * Rebuild the portfolio's daily value from transactions and price history.
+   * histories: { holdingId: [{date, price}] } in each holding's currency.
+   * Returns { points: [{date, value, cost, flow}], estimated: [holding names] }.
+   */
+  function buildHistory(holdings, { histories = {}, convert, base = 'USD', start, end }) {
+    const today = end;
+    const models = [];
+    const estimated = [];
+    let first = null;
+    for (const h of holdings) {
+      if (!h.transactions.length) continue;
+      const rate = convert ? convert(1, h.currency, base) : 1;
+      if (rate === null) continue;
+      const model = priceModel(h, histories[h.id], today);
+      const txs = [...h.transactions].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      if (!first || txs[0].date < first) first = txs[0].date;
+      models.push({ h, model, txs, rate, ti: 0, qty: 0, cost: 0 });
+    }
+    if (!first) return { points: [], estimated: [] };
+    const from = start && start > first ? start : first;
+    // A holding is "estimated" if any day it was held in range has no market price.
+    for (const m of models) {
+      if (m.h.priceSource === 'cash') continue;
+      const heldFrom = m.txs[0].date > from ? m.txs[0].date : from;
+      if (m.model.estimated || m.model.marketStart > heldFrom) estimated.push(m.h.name);
+    }
+    const points = [];
+    for (let d = first; d <= end; d = addDays(d, 1)) {
+      let value = 0, cost = 0, flow = 0;
+      for (const m of models) {
+        while (m.ti < m.txs.length && m.txs[m.ti].date <= d) {
+          const t = m.txs[m.ti++];
+          flow += cashFlow(t) * m.rate;
+          if (t.type === 'buy') { m.qty += t.quantity; m.cost += t.quantity * t.price + t.fees; }
+          if (t.type === 'sell') {
+            const q = Math.min(t.quantity, m.qty);
+            m.cost -= m.qty > 0 ? (m.cost / m.qty) * q : 0;
+            m.qty -= q;
+            if (m.qty < 1e-12) { m.qty = 0; m.cost = 0; }
+          }
+        }
+        if (m.qty > 0) {
+          value += m.qty * m.model.priceOn(d) * m.rate;
+          cost += m.cost * m.rate;
+        }
+      }
+      if (d >= from) points.push({ date: d, value, cost, flow });
+    }
+    return { points, estimated: [...new Set(estimated)] };
+  }
+
+  /**
+   * Time-weighted return: each day's gain is measured against the money that
+   * was in the portfolio, so deposits and withdrawals don't count as gains.
+   * Money added counts from the start of its day, money taken out from the end.
+   * Returns [{date, pct, value}] with pct cumulative from the first point (0).
+   */
+  function performance(points) {
+    const out = [];
+    let growth = 1;
+    let gain = 0;
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (i > 0) {
+        const prev = points[i - 1].value;
+        const deposit = Math.max(p.flow, 0);
+        const withdrawal = Math.max(-p.flow, 0);
+        const base = prev + deposit;
+        if (base > 1e-9) growth *= (p.value + withdrawal) / base;
+        gain += p.value - prev - p.flow;
+      }
+      out.push({ date: p.date, pct: growth - 1, gain, value: p.value });
+    }
+    return out;
+  }
+
+  /** Return and money gained between two dates (inclusive), excluding deposits. */
+  function periodChange(points, fromDate) {
+    const slice = points.filter((p) => p.date >= fromDate);
+    if (slice.length < 2) return null;
+    const perf = performance(slice);
+    const last = perf[perf.length - 1];
+    return { pct: last.pct, gain: last.gain, from: slice[0].date };
+  }
+
   function sampleHoldings() {
     const buy = (date, quantity, price, fees = 0) => ({ type: 'buy', date, quantity, price, fees });
     const sell = (date, quantity, price, fees = 0) => ({ type: 'sell', date, quantity, price, fees });
@@ -380,6 +544,7 @@
       { name: 'Charizard — Base Set Holo', category: 'collectible', subcategory: 'Pokémon card', priceSource: 'pokemontcg', priceKey: 'base1-4', currentPrice: 420,
         notes: 'Raw, near mint', transactions: [buy('2021-05-30', 1, 350)] },
       { name: 'Rolex Submariner', category: 'collectible', subcategory: 'Watch', priceSource: 'manual', currentPrice: 11200,
+        valuations: [{ date: '2022-03-01', price: 13800 }, { date: '2023-10-01', price: 10900 }],
         transactions: [buy('2020-08-15', 1, 9500)] },
       { name: 'Euro savings account', category: 'cash', subcategory: 'Savings account', currency: 'EUR', priceSource: 'cash',
         transactions: [buy('2024-01-01', 7000, 1), buy('2024-06-01', 500, 1), income('2024-12-31', 210, 'Interest')] },
@@ -393,5 +558,6 @@
     categoryById, toNumber, newId, normCurrency, normalizeHolding, normalizeTransaction,
     position, validateHolding, validateTransaction, metalPricePerUnit, makeConverter,
     holdingMetrics, summarize, recordSnapshot, holdingsCSV, transactionsCSV, parseBackup, sampleHoldings,
+    cashFlow, addValuation, addDays, priceModel, buildHistory, performance, periodChange,
   };
 });

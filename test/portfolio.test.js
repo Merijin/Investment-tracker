@@ -168,3 +168,66 @@ test('sample portfolio is valid and exercises every transaction type', () => {
   assert.deepEqual([...types].sort(), ['buy', 'income', 'sell']);
   assert.ok(sample.some((h) => h.currency !== 'USD'));
 });
+
+test('buildHistory replays trades day by day using market history', () => {
+  const h = holding({ category: 'crypto', priceSource: 'coingecko', priceKey: 'x', currentPrice: 120, transactions: [
+    buy('2025-01-01', 2, 100), sell('2025-01-03', 1, 110),
+  ] });
+  const series = [{ date: '2025-01-01', price: 100 }, { date: '2025-01-02', price: 105 }, { date: '2025-01-03', price: 110 }];
+  const { points, estimated } = P.buildHistory([h], { histories: { [h.id]: series }, end: '2025-01-05' });
+  assert.deepEqual(points.map((p) => [p.date, p.value, p.flow]), [
+    ['2025-01-01', 200, 200], ['2025-01-02', 210, 0], ['2025-01-03', 110, -110],
+    ['2025-01-04', 110, 0],   // carried forward over a gap
+    ['2025-01-05', 120, 0],   // today's price
+  ]);
+  assert.equal(points[2].cost, 100);
+  assert.deepEqual(estimated, []);
+});
+
+test('buildHistory interpolates manual assets between valuations and converts currency', () => {
+  const h = holding({ category: 'collectible', currency: 'EUR', currentPrice: 300,
+    valuations: [{ date: '2025-01-03', price: 200 }], transactions: [buy('2025-01-01', 1, 100)] });
+  const { points, estimated } = P.buildHistory([h], { convert: P.makeConverter({ EUR: 0.5 }), base: 'USD', end: '2025-01-05' });
+  assert.deepEqual(points.map((p) => p.value), [200, 300, 400, 500, 600]);
+  assert.deepEqual(estimated, ['x']);
+  const ranged = P.buildHistory([h], { end: '2025-01-05', start: '2025-01-04' });
+  assert.deepEqual(ranged.points.map((p) => p.date), ['2025-01-04', '2025-01-05']);
+});
+
+test('performance ignores deposits and withdrawals (time-weighted)', () => {
+  const pts = [
+    { date: 'd1', value: 100, flow: 100 },
+    { date: 'd2', value: 110, flow: 0 },     // +10%
+    { date: 'd3', value: 1110, flow: 1000 }, // deposit only: 0%
+    { date: 'd4', value: 1221, flow: 0 },    // +10%
+    { date: 'd5', value: 0, flow: -1221 },   // sold everything at that price: 0%
+  ];
+  const perf = P.performance(pts);
+  assert.ok(Math.abs(perf[1].pct - 0.10) < 1e-12);
+  assert.ok(Math.abs(perf[2].pct - 0.10) < 1e-12);
+  assert.ok(Math.abs(perf[3].pct - 0.21) < 1e-12);
+  assert.ok(Math.abs(perf[4].pct - 0.21) < 1e-12);
+  assert.ok(Math.abs(perf[4].gain - 121) < 1e-9);
+  const ch = P.periodChange(pts, 'd3');
+  assert.ok(Math.abs(ch.pct - 0.10) < 1e-12);
+  assert.equal(P.periodChange(pts, 'd9'), null);
+});
+
+test('income counts as return, not as a loss of value', () => {
+  const pts = [{ date: 'a', value: 100, flow: 100 }, { date: 'b', value: 100, flow: -5 }];
+  assert.ok(Math.abs(P.performance(pts)[1].pct - 0.05) < 1e-12);
+});
+
+test('addValuation keeps one value per day', () => {
+  const v = P.addValuation({ valuations: [{ date: '2025-01-02', price: 5 }] }, '2025-01-01', 3);
+  assert.deepEqual(P.addValuation({ valuations: v }, '2025-01-02', 7), [{ date: '2025-01-01', price: 3 }, { date: '2025-01-02', price: 7 }]);
+});
+
+test('estimates before market history join up with its first price', () => {
+  const h = holding({ category: 'crypto', priceSource: 'coingecko', priceKey: 'x', currentPrice: 500,
+    transactions: [buy('2025-01-01', 1, 100)] });
+  const m = P.priceModel(h, [{ date: '2025-01-05', price: 300 }], '2025-01-09');
+  assert.equal(m.priceOn('2025-01-03'), 200);
+  assert.equal(m.priceOn('2025-01-05'), 300);
+  assert.equal(m.priceOn('2025-01-09'), 500);
+});

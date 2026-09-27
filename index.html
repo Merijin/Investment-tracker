@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Investment Tracker</title>
   <meta name="description" content="Track stocks, crypto, precious metals, collectibles and anything else you invest in — in one place.">
-  <meta name="theme-color" content="#2a78d6">
+  <meta name="theme-color" content="#1a1a19">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Investments">
@@ -73,17 +73,24 @@
           </div>
           <div id="allocation" class="allocation"></div>
         </div>
-        <div class="card">
+        <div class="card perf-card">
           <div class="card-head">
-            <h2>Portfolio value</h2>
-            <div class="segmented" role="group" aria-label="Time range" id="range">
-              <button data-range="30">1M</button>
-              <button data-range="90">3M</button>
-              <button data-range="365">1Y</button>
-              <button data-range="0" class="active">All</button>
+            <div>
+              <h2>Performance</h2>
+              <div class="perf-headline" id="perf-headline"></div>
+            </div>
+            <div class="segmented" role="group" aria-label="Chart type" id="chart-mode">
+              <button data-mode="value">Value</button>
+              <button data-mode="return">Return %</button>
             </div>
           </div>
+          <div class="periods" role="group" aria-label="Time range" id="range"></div>
+          <div class="legend" id="chart-legend">
+            <span><i class="key key-line"></i>Value</span>
+            <span><i class="key key-dash"></i>Invested</span>
+          </div>
           <div id="history" class="history"></div>
+          <p class="chart-note muted small" id="chart-note"></p>
         </div>
       </section>
 

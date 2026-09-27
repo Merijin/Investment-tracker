@@ -263,6 +263,86 @@
     }));
   }
 
+
+  // ---------- price history ----------
+
+  const toDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+
+  /** One point per day (last wins), sorted. */
+  function dailyPoints(pairs) {
+    const byDay = new Map();
+    for (const [date, price] of pairs) if (price > 0) byDay.set(date, price);
+    return [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, price]) => ({ date, price }));
+  }
+
+  async function coingeckoHistory(id, { fetchFn, days }) {
+    // The free public API serves up to 365 days of daily prices.
+    const d = await getJSON(fetchFn, `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(id)}/market_chart?${qs({ vs_currency: 'usd', days: Math.min(days, 365), interval: 'daily' })}`);
+    return { points: dailyPoints((d.prices || []).map(([ms, price]) => [toDay(ms), price])), currency: 'USD' };
+  }
+
+  async function twelvedataHistory(key, { fetchFn, settings, days }) {
+    const apikey = requireKey(settings, 'twelvedata', 'Twelve Data');
+    const [symbol, exchange] = key.split(':');
+    const d = await getJSON(fetchFn, `https://api.twelvedata.com/time_series?${qs({ symbol, exchange, interval: '1day', outputsize: Math.min(days, 5000), apikey })}`);
+    if (d.status === 'error') throw new Error(d.message || `No history for ${key}`);
+    const { currency, divisor } = majorCurrency(d.meta && d.meta.currency);
+    return { points: dailyPoints((d.values || []).map((v) => [v.datetime.slice(0, 10), num(v.close) / divisor])), currency };
+  }
+
+  async function alphavantageHistory(symbol, { fetchFn, settings, days }) {
+    const apikey = requireKey(settings, 'alphavantage', 'Alpha Vantage');
+    // "compact" (last 100 trading days) is the free tier's limit.
+    const d = await getJSON(fetchFn, `https://www.alphavantage.co/query?${qs({ function: 'TIME_SERIES_DAILY', symbol, outputsize: days > 100 ? 'full' : 'compact', apikey })}`);
+    const limit = d.Note || d.Information || d['Error Message'];
+    const series = d['Time Series (Daily)'];
+    if (!series) throw new Error(String(limit || `No history for ${symbol}`).slice(0, 120));
+    return { points: dailyPoints(Object.entries(series).map(([date, v]) => [date, num(v['4. close'])])), currency: undefined };
+  }
+
+  /** Which history source (if any) can serve a holding. */
+  function historySource(h, settings = {}) {
+    const keys = settings.keys || {};
+    switch (h.priceSource) {
+      case 'coingecko': return { kind: 'coingecko', id: h.priceKey };
+      case 'metal': {
+        // Tokens backed 1:1 by a troy ounce track the spot price closely.
+        const token = { XAU: 'pax-gold', XAG: 'kinesis-silver' }[h.priceKey];
+        return token ? { kind: 'coingecko', id: token } : null;
+      }
+      case 'twelvedata': return keys.twelvedata ? { kind: 'twelvedata', id: h.priceKey } : null;
+      case 'alphavantage': return keys.alphavantage ? { kind: 'alphavantage', id: h.priceKey } : null;
+      // Finnhub's free tier has no history; borrow another stock source if a key exists.
+      case 'finnhub':
+        if (keys.twelvedata) return { kind: 'twelvedata', id: h.priceKey.replace(/\.L$/, ':LSE') };
+        if (keys.alphavantage) return { kind: 'alphavantage', id: h.priceKey.replace(/\.L$/, '.LON') };
+        return null;
+      default: return null;
+    }
+  }
+
+  const HISTORY_FETCHERS = { coingecko: coingeckoHistory, twelvedata: twelvedataHistory, alphavantage: alphavantageHistory };
+
+  /**
+   * Daily price history for a holding, in the holding's own currency and unit.
+   * Returns null when no free history source exists for it.
+   */
+  async function fetchHistory(h, { fetchFn = globalThis.fetch.bind(globalThis), settings = {}, rates = null, days = 365 } = {}) {
+    const src = historySource(h, settings);
+    if (!src) return null;
+    const { points, currency } = await HISTORY_FETCHERS[src.kind](src.id, { fetchFn, settings, days });
+    const convert = Portfolio.makeConverter(rates);
+    let quoteCurrency = currency || h.currency;
+    let divisor = 1;
+    const pence = PENCE_SUFFIX[src.kind];
+    if (!currency && pence && pence.test(src.id)) { quoteCurrency = 'GBP'; divisor = 100; }
+    // Past prices are converted at today's exchange rate.
+    const rate = convert(1, quoteCurrency, h.currency);
+    if (rate === null) throw new Error(`No exchange rate for ${quoteCurrency} → ${h.currency}`);
+    const unit = h.priceSource === 'metal' ? Portfolio.metalPricePerUnit(1, h.unit) : 1;
+    return points.map((p) => ({ date: p.date, price: (p.price / divisor) * rate * unit }));
+  }
+
   // ---------- search ----------
 
   /**
@@ -329,7 +409,7 @@
   }
 
   return {
-    refreshAll, fetchRates, search, readPath, majorCurrency, pickPokemonPrice, pickScryfallPrice,
+    refreshAll, fetchRates, search, readPath, majorCurrency, fetchHistory, historySource, pickPokemonPrice, pickScryfallPrice,
     coingeckoBatch, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom,
   };
 });

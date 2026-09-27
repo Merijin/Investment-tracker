@@ -181,3 +181,24 @@ test('prices quoted in pence are converted to pounds', async () => {
   assert.deepEqual(Prices.majorCurrency('ZAc'), { currency: 'ZAR', divisor: 100 });
   assert.deepEqual(Prices.majorCurrency('usd'), { currency: 'USD', divisor: 1 });
 });
+
+test('fetchHistory: crypto, metals via tokens, stocks via Twelve Data, pence and currency', async () => {
+  const fetchFn = fakeFetch({
+    'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart': { prices: [[Date.UTC(2025, 0, 1), 100], [Date.UTC(2025, 0, 1, 12), 101], [Date.UTC(2025, 0, 2), 110]] },
+    'https://api.coingecko.com/api/v3/coins/pax-gold/market_chart': { prices: [[Date.UTC(2025, 0, 1), 3110.34768]] },
+    'https://api.twelvedata.com/time_series?symbol=TSCO&exchange=LSE': { meta: { currency: 'GBp' }, values: [{ datetime: '2025-01-02', close: '300' }, { datetime: '2025-01-01', close: '250' }] },
+  });
+  const btc = await Prices.fetchHistory(h({ category: 'crypto', priceSource: 'coingecko', priceKey: 'bitcoin', currency: 'EUR' }), { fetchFn, rates: { EUR: 0.5 } });
+  assert.deepEqual(btc, [{ date: '2025-01-01', price: 50.5 }, { date: '2025-01-02', price: 55 }]);
+  const gold = await Prices.fetchHistory(h({ category: 'metal', priceSource: 'metal', priceKey: 'XAU', unit: 'g' }), { fetchFn });
+  assert.ok(Math.abs(gold[0].price - 100) < 1e-9);
+  const tsco = await Prices.fetchHistory(h({ priceSource: 'twelvedata', priceKey: 'TSCO:LSE', currency: 'GBP' }), { fetchFn, settings: { keys } });
+  assert.deepEqual(tsco, [{ date: '2025-01-01', price: 2.5 }, { date: '2025-01-02', price: 3 }]);
+});
+
+test('historySource picks what the free tiers can serve', () => {
+  assert.equal(Prices.historySource(h({ priceSource: 'finnhub', priceKey: 'AAPL' }), {}), null);
+  assert.deepEqual(Prices.historySource(h({ priceSource: 'finnhub', priceKey: 'VOD.L' }), { keys: { twelvedata: 'k' } }), { kind: 'twelvedata', id: 'VOD:LSE' });
+  assert.equal(Prices.historySource(h({ category: 'metal', priceSource: 'metal', priceKey: 'XPT' }), {}), null);
+  assert.equal(Prices.historySource(h({ category: 'collectible', priceSource: 'pokemontcg', priceKey: 'base1-4' }), {}), null);
+});
