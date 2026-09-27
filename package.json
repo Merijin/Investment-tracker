@@ -1,0 +1,11 @@
+{
+  "name": "investment-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "All-in-one investment tracker for stocks, crypto, precious metals, collectibles and more.",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test"
+  },
+  "license": "MIT"
+}
