@@ -489,3 +489,4 @@ dialog.wide { width: min(860px, calc(100vw - 32px)); }
   .portfolio-bar select { flex: 1; min-width: 0; }
   .pb-actions { width: 100%; }
 }
+.app-version { margin: 0; text-align: right; }
