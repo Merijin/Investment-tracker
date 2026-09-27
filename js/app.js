@@ -48,8 +48,8 @@
     snapshots: [],
     savedAt: null,
     shared: { baseCurrency: 'USD', updatedAt: '' },               // synced
-    keys: { finnhub: '', twelvedata: '', alphavantage: '', pokemontcg: '' },
-    device: { theme: 'dark', autoRefresh: true, syncKeys: false, syncToken: '', gistId: '', lastSync: null, darkDefault: true },
+    keys: { finnhub: '', twelvedata: '', alphavantage: '', pokemontcg: '', priceServerUrl: '', priceServerToken: '' },
+    device: { theme: 'retro', autoRefresh: true, syncKeys: false, syncToken: '', gistId: '', lastSync: null, retroDefault: true },
     rates: null,          // { rates: {EUR: 0.92, ...}, fetchedAt }
     histories: {},        // device cache: { cacheKey: { fetchedAt, points: [{date, price}] | null, error } }
     lastRefresh: null,
@@ -80,15 +80,15 @@
       if (saved.version >= 2) {
         Object.assign(state.shared, saved.shared);
         Object.assign(state.keys, saved.keys);
-        const hadDarkDefault = saved.device && saved.device.darkDefault;
+        const hadRetroDefault = saved.device && saved.device.retroDefault;
         Object.assign(state.device, saved.device);
-        // Dark became the default; switch anyone still on the old default once.
-        if (!hadDarkDefault) state.device = { ...state.device, theme: 'dark', darkDefault: true };
+        // Retro became the default look; switch everyone to it once.
+        if (!hadRetroDefault) state.device = { ...state.device, theme: 'retro', retroDefault: true };
       } else if (saved.settings) {
         // v1 kept everything in one settings object
         state.keys.finnhub = saved.settings.finnhubKey || '';
         state.keys.pokemontcg = saved.settings.pokemonKey || '';
-        state.device.theme = saved.settings.theme || 'system';
+        state.device.theme = 'retro';
         state.device.autoRefresh = saved.settings.autoRefresh !== false;
       }
     } catch (err) {
@@ -219,7 +219,7 @@
       const crypto = cur === 'BTC' || cur === 'ETH';
       try {
         return new Intl.NumberFormat(undefined, {
-          style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol',
+          style: 'currency', currency: cur, currencyDisplay: 'symbol',
           ...(crypto && !opts.notation ? { maximumFractionDigits: 6 } : {}), ...opts,
         });
       } catch {
@@ -259,7 +259,7 @@
 
   function applyTheme() {
     const t = state.device.theme;
-    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    if (t === 'light' || t === 'dark' || t === 'retro') document.documentElement.dataset.theme = t;
     else delete document.documentElement.dataset.theme;
   }
 
@@ -611,7 +611,10 @@
     $('#price-key-input').hidden = isMetal;
     $('#price-key-metal').hidden = !isMetal;
     $('#btn-find').hidden = !info.search;
+    $('#btn-find').textContent = info.search === 'test' ? 'Test' : 'Find';
     $('#price-path-field').hidden = src !== 'custom';
+    fillOptionSelect('#price-option', '#price-option-field', '#price-option-label', info.options, info.optionLabel);
+    fillOptionSelect('#price-method', '#price-method-field', '#price-method-label', info.methods, info.methodLabel);
     $('#search-results').hidden = true;
     $('#price-key-label').textContent = info.keyLabel || '';
     $('#price-key-hint').textContent = info.keyHint || '';
@@ -626,6 +629,16 @@
     $('#first-qty-label').textContent = isCash ? 'Amount deposited' : 'Quantity';
     $('#first-price-field').hidden = isCash;
     syncCurrencyLabels();
+  }
+
+  function fillOptionSelect(sel, field, label, options, text) {
+    const el = $(sel);
+    const prev = el.value;
+    $(field).hidden = !options;
+    if (!options) { el.innerHTML = ''; return; }
+    $(label).textContent = text;
+    el.innerHTML = options.map(([v, l]) => `<option value="${v}">${escapeHTML(l)}</option>`).join('');
+    if (options.some(([v]) => v === prev)) el.value = prev;
   }
 
   function syncCurrencyLabels() {
@@ -650,6 +663,8 @@
       if (h.priceSource === 'metal' && h.priceKey) form.priceKeyMetal.value = h.priceKey;
       form.currentPrice.value = h.currentPrice ?? '';
       syncSource();
+      if (h.priceOption) form.priceOption.value = h.priceOption;
+      if (h.priceMethod) form.priceMethod.value = h.priceMethod;
     }
     $('#first-purchase').hidden = !!holding;
     form.txDate.value = today();
@@ -668,7 +683,8 @@
     const query = form.priceKey.value.trim() || form.name.value.trim();
     box.hidden = false;
     if (!query) { box.innerHTML = '<div class="sr-msg">Type a name or symbol first.</div>'; return; }
-    box.innerHTML = '<div class="sr-msg">Searching…</div>';
+    box.innerHTML = `<div class="sr-msg">${P.SOURCES[src].search === 'test' ? 'Checking…' : 'Searching…'}</div>`;
+    if (P.SOURCES[src].search === 'test') { await runSourceTest(src, query, box); return; }
     try {
       const results = await Prices.search(src, query, { settings: { keys: state.keys }, fetchFn: fetch.bind(window) });
       if (!results.length) { box.innerHTML = '<div class="sr-msg">No matches.</div>'; return; }
@@ -691,6 +707,26 @@
     }
   });
 
+  /** Try an eBay search or property location with the form's current values. */
+  async function runSourceTest(src, key, box) {
+    const data = Object.fromEntries(new FormData(form));
+    const existing = state.holdings.find((h) => h.id === editingId);
+    const draft = P.normalizeHolding({
+      ...data,
+      transactions: existing ? existing.transactions
+        : data.txPrice ? [{ type: 'buy', date: data.txDate, quantity: data.txQuantity || 1, price: data.txPrice }] : [],
+    });
+    try {
+      const r = await Prices.test(src, key, draft, { settings: { keys: state.keys }, fetchFn: fetch.bind(window) });
+      const items = r.items.map((i) => `<div class="sr-item">${i.url
+        ? `<a href="${escapeHTML(i.url)}" target="_blank" rel="noopener">${escapeHTML(i.name)}</a>` : escapeHTML(i.name)}
+        <span class="sr-detail">${escapeHTML(i.detail)}</span></div>`).join('');
+      box.innerHTML = `<div class="sr-msg"><b>${fmt.price(r.price, r.currency)}</b> per unit · ${escapeHTML(r.summary)}</div>${items}`;
+    } catch (err) {
+      box.innerHTML = `<div class="sr-msg">⚠ ${escapeHTML(err.message)}</div>`;
+    }
+  }
+
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(form));
@@ -712,7 +748,7 @@
     const priceTyped = data.currentPrice !== '';
     const priceChanged = !existing || String(existing.currentPrice ?? '') !== data.currentPrice;
     const norm = (v) => String(v ?? '').trim().toUpperCase();
-    const lookupChanged = !existing || ['priceKey', 'priceSource', 'unit', 'subcategory', 'currency', 'pricePath']
+    const lookupChanged = !existing || ['priceKey', 'priceSource', 'unit', 'subcategory', 'currency', 'pricePath', 'priceOption', 'priceMethod']
       .some((f) => norm(existing[f]) !== norm(data[f]));
     const holding = P.normalizeHolding({
       ...(existing || {}),
@@ -928,7 +964,7 @@
 
   function openSettings() {
     fillCurrencySelect(settingsForm.baseCurrency, base());
-    settingsForm.theme.value = state.device.theme || 'system';
+    settingsForm.theme.value = state.device.theme || 'retro';
     settingsForm.autoRefresh.checked = !!state.device.autoRefresh;
     settingsForm.syncToken.value = state.device.syncToken || '';
     settingsForm.syncKeys.checked = !!state.device.syncKeys;
@@ -996,6 +1032,23 @@
       $('#sync-info').textContent = 'Syncing…';
       await runSync();
       renderSyncStatus();
+    } else if (action === 'test-server') {
+      readSettings();
+      persist();
+      const info = $('#server-info');
+      if (!state.keys.priceServerUrl) { info.textContent = 'Enter the price server address first.'; return; }
+      info.textContent = 'Connecting…';
+      try {
+        const res = await fetch(state.keys.priceServerUrl.replace(/\/+$/, '') + '/health',
+          state.keys.priceServerToken ? { headers: { 'X-App-Token': state.keys.priceServerToken } } : undefined);
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || `Error ${res.status}`);
+        const on = (b) => (b ? '✓' : '✗');
+        info.textContent = `Connected. ${on(d.sources.ebay)} eBay${d.sources.ebay ? (d.sources.ebaySold ? ' (sold prices)' : ' (listings only)') : ''} · ` +
+          `${on(d.sources.pricecharting)} PriceCharting · ${on(d.sources.domain)} AU property · ${on(d.sources.ukhpi)} UK property`;
+      } catch (err) {
+        info.textContent = '⚠ ' + (err.message === 'Failed to fetch' ? 'Could not reach that address.' : err.message);
+      }
     } else if (action === 'sync-off') {
       state.device = { ...state.device, syncToken: '', gistId: '', lastSync: null };
       settingsForm.syncToken.value = '';

@@ -202,3 +202,53 @@ test('historySource picks what the free tiers can serve', () => {
   assert.equal(Prices.historySource(h({ category: 'metal', priceSource: 'metal', priceKey: 'XPT' }), {}), null);
   assert.equal(Prices.historySource(h({ category: 'collectible', priceSource: 'pokemontcg', priceKey: 'base1-4' }), {}), null);
 });
+
+const server = { keys: { priceServerUrl: 'https://prices.example/', priceServerToken: 'code' } };
+
+test('server sources need the price server configured', async () => {
+  const [card] = await Prices.refreshAll([h({ category: 'collectible', priceSource: 'ebay', priceKey: 'charizard' })], { fetchFn: fakeFetch({}), now });
+  assert.match(card.priceError, /price server/);
+});
+
+test('eBay prices use the local marketplace and convert currency', async () => {
+  const fetchFn = fakeFetch({ 'https://prices.example/ebay?': { price: 150, currency: 'AUD', count: 12, mode: 'sold', samples: [] } });
+  const [card] = await Prices.refreshAll([h({ category: 'collectible', priceSource: 'ebay', priceKey: 'charizard psa 9', currency: 'AUD' })],
+    { fetchFn, now, settings: server });
+  assert.equal(card.currentPrice, 150);
+  const call = fetchFn.calls[0];
+  assert.ok(call.url.includes('marketplace=EBAY_AU') && call.url.includes('mode=sold') && call.url.includes('q=charizard%20psa%209'));
+  assert.equal(call.opts.headers['X-App-Token'], 'code');
+});
+
+test('PriceCharting picks the chosen grade', async () => {
+  const fetchFn = fakeFetch({ 'https://prices.example/pricecharting?': { currency: 'USD', prices: { ungraded: 450, psa10: 12000 } } });
+  const [psa, g9] = await Prices.refreshAll([
+    h({ category: 'collectible', priceSource: 'pricecharting', priceKey: '6910', priceOption: 'psa10' }),
+    h({ category: 'collectible', priceSource: 'pricecharting', priceKey: '6910', priceOption: 'grade9' }),
+  ], { fetchFn, now, settings: server });
+  assert.equal(psa.currentPrice, 12000);
+  assert.match(g9.priceError, /No Grade 9 price/);
+  assert.equal(P.normalizeHolding({ priceSource: 'pricecharting', priceOption: 'bogus' }).priceOption, 'ungraded');
+});
+
+test('property: area median, or purchase price grown with the area', async () => {
+  const body = { price: 1100000, currency: 'AUD', period: '2026-06-30', area: 'Melbourne VIC 3000', source: 'Domain',
+    history: [{ date: '2020-03-31', price: 800000 }, { date: '2023-06-30', price: 1000000 }, { date: '2026-06-30', price: 1100000 }] };
+  const fetchFn = fakeFetch({ 'https://prices.example/property?': body });
+  const house = (method) => h({ category: 'real_estate', priceSource: 'property', priceKey: 'Melbourne, VIC 3000', currency: 'AUD',
+    priceMethod: method, transactions: [{ type: 'buy', date: '2023-08-01', quantity: 1, price: 900000 }] });
+  const [median, growth] = await Prices.refreshAll([house('median'), house('growth')], { fetchFn, now, settings: server });
+  assert.equal(median.currentPrice, 1100000);
+  assert.ok(Math.abs(growth.currentPrice - 990000) < 1e-6); // 900k × 1.1M / 1.0M
+  const hist = await Prices.fetchHistory(house('growth'), { fetchFn, settings: server });
+  assert.deepEqual(hist.map((p) => Math.round(p.price)), [720000, 900000, 990000]);
+  const t = await Prices.test('property', 'Melbourne, VIC 3000', house('growth'), { fetchFn, settings: server });
+  assert.match(t.summary, /Melbourne VIC 3000/);
+  assert.equal(t.items.length, 3);
+});
+
+test('pricecharting search goes through the server', async () => {
+  const fetchFn = fakeFetch({ 'https://prices.example/pricecharting/search?': { products: [{ id: '6910', name: 'Charizard #4', set: 'Pokemon Base Set' }] } });
+  assert.deepEqual(await Prices.search('pricecharting', 'charizard', { fetchFn, settings: server }),
+    [{ key: '6910', name: 'Charizard #4', detail: 'Pokemon Base Set' }]);
+});

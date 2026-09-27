@@ -1,17 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="retro">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Investment Tracker</title>
   <meta name="description" content="Track stocks, crypto, precious metals, collectibles and anything else you invest in — in one place.">
-  <meta name="theme-color" content="#1a1a19">
+  <meta name="theme-color" content="#0a0d12">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Investments">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=VT323&display=swap">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -161,6 +164,14 @@
             </div>
           </label>
           <small class="muted" id="price-key-hint"></small>
+          <div class="grid2 option-row">
+            <label id="price-option-field" hidden><span id="price-option-label">Option</span>
+              <select name="priceOption" id="price-option"></select>
+            </label>
+            <label id="price-method-field" hidden><span id="price-method-label">Method</span>
+              <select name="priceMethod" id="price-method"></select>
+            </label>
+          </div>
           <div id="search-results" class="search-results" hidden></div>
           <label id="price-path-field" hidden><span>JSON path to the price</span>
             <input name="pricePath" placeholder="e.g. data.price or result[0].close" spellcheck="false">
@@ -267,6 +278,7 @@
       </label>
       <label><span>Theme</span>
         <select name="theme">
+          <option value="retro">Retro terminal</option>
           <option value="system">Match system</option>
           <option value="light">Light</option>
           <option value="dark">Dark</option>
@@ -302,6 +314,20 @@
       <label><span>Pokémon TCG <span class="muted">— optional, raises rate limits</span></span>
         <input name="key_pokemontcg" autocomplete="off" spellcheck="false">
       </label>
+
+      <h3>Price server <span class="muted small">(eBay, PriceCharting, property prices)</span></h3>
+      <p class="muted small">These sources need secret keys, so they run through your own free price server.
+        See <b>server/README</b> in the project for the 10-minute setup.</p>
+      <label><span>Price server address</span>
+        <input name="key_priceServerUrl" autocomplete="off" spellcheck="false" placeholder="https://investment-tracker-prices.you.workers.dev">
+      </label>
+      <label><span>Access code</span>
+        <input name="key_priceServerToken" type="password" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="row gap wrap">
+        <button type="button" class="btn" data-action="test-server">Test connection</button>
+        <span class="muted small" id="server-info"></span>
+      </div>
 
       <h3>Your data</h3>
       <div class="row gap wrap">

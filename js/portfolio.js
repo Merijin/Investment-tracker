@@ -23,11 +23,11 @@
     { id: 'crypto',      label: 'Crypto',          slot: 2, defaultUnit: 'coins',  sources: ['coingecko', 'manual'] },
     { id: 'etf',         label: 'ETFs & funds',    slot: 3, defaultUnit: 'shares', sources: ['finnhub', 'twelvedata', 'alphavantage', 'manual'] },
     { id: 'metal',       label: 'Precious metals', slot: 4, defaultUnit: 'ozt',    sources: ['metal', 'manual'] },
-    { id: 'collectible', label: 'Collectibles',    slot: 5, defaultUnit: 'items',  sources: ['pokemontcg', 'scryfall', 'ygoprodeck', 'manual'] },
-    { id: 'real_estate', label: 'Real estate',     slot: 6, defaultUnit: 'units',  sources: ['manual'] },
+    { id: 'collectible', label: 'Collectibles',    slot: 5, defaultUnit: 'items',  sources: ['pricecharting', 'ebay', 'pokemontcg', 'scryfall', 'ygoprodeck', 'manual'] },
+    { id: 'real_estate', label: 'Real estate',     slot: 6, defaultUnit: 'properties', sources: ['property', 'manual'] },
     { id: 'bond',        label: 'Bonds',           slot: 7, defaultUnit: 'units',  sources: ['manual', 'twelvedata'] },
     { id: 'cash',        label: 'Cash & savings',  slot: 8, defaultUnit: '',       sources: ['cash', 'manual'] },
-    { id: 'other',       label: 'Other',           slot: 0, defaultUnit: 'units',  sources: ['manual', 'custom'] },
+    { id: 'other',       label: 'Other',           slot: 0, defaultUnit: 'units',  sources: ['manual', 'ebay', 'custom'] },
   ];
 
   // `quoteCurrency` is the currency a source returns; 'holding' means the
@@ -43,6 +43,28 @@
     pokemontcg:   { label: 'Pokémon TCG — card market price', keyLabel: 'Card id', keyHint: 'e.g. base1-4 — use Find to search by name', search: true, quoteCurrency: 'quote' },
     scryfall:     { label: 'Scryfall — Magic: The Gathering', keyLabel: 'Scryfall card id', keyHint: 'Use Find to search. Add "foil" to type/details for foil prices.', search: true, quoteCurrency: 'quote' },
     ygoprodeck:   { label: 'YGOPRODeck — Yu-Gi-Oh!', keyLabel: 'Card id', keyHint: 'Use Find to search by card name', search: true, quoteCurrency: 'quote' },
+    pricecharting: {
+      label: 'PriceCharting — sold-price guide (cards, comics, games)', keyLabel: 'PriceCharting product id',
+      keyHint: 'Use Find to search, then pick the grade. Needs the price server.', search: 'find', server: true, quoteCurrency: 'quote',
+      optionLabel: 'Grade',
+      options: [['ungraded', 'Ungraded'], ['grade7', 'Grade 7'], ['grade8', 'Grade 8'], ['grade9', 'Grade 9'], ['grade9.5', 'Grade 9.5'],
+        ['psa10', 'PSA 10'], ['bgs10', 'BGS 10'], ['cgc10', 'CGC 10'], ['sgc10', 'SGC 10']],
+    },
+    ebay: {
+      label: 'eBay — median of recent sales', keyLabel: 'eBay search words',
+      keyHint: 'Describe it the way sellers do, e.g. "charizard base set holo psa 9". Add -word to exclude (-proxy -lot). Use Test to see the matches.',
+      search: 'test', server: true, quoteCurrency: 'quote',
+      optionLabel: 'Use', options: [['sold', 'Sold prices'], ['active', 'Current listings']],
+    },
+    property: {
+      label: 'Area property prices (AU suburb median, UK index)', keyLabel: 'Location',
+      keyHint: 'Australia: suburb, state and postcode, e.g. "Melbourne, VIC 3000". UK: region or council, e.g. "Manchester".',
+      search: 'test', server: true, quoteCurrency: 'quote',
+      optionLabel: 'Property type',
+      options: [['house', 'House'], ['unit', 'Unit / flat'], ['detached', 'Detached (UK)'], ['semi', 'Semi-detached (UK)'], ['terraced', 'Terraced (UK)']],
+      methodLabel: 'Value it as',
+      methods: [['growth', 'My price, grown with the area'], ['median', 'The area median price']],
+    },
     custom:       { label: 'Custom JSON API (advanced)', keyLabel: 'URL', keyHint: 'Any CORS-enabled URL returning JSON; price read from the path below, in the holding currency', quoteCurrency: 'holding' },
   };
 
@@ -116,6 +138,8 @@
       priceSource: source,
       priceKey: String(raw.priceKey || '').trim(),
       pricePath: String(raw.pricePath || '').trim(),
+      priceOption: String(raw.priceOption || '').trim(),
+      priceMethod: String(raw.priceMethod || '').trim(),
       currentPrice: raw.currentPrice === '' || raw.currentPrice === undefined || raw.currentPrice === null
         ? null
         : toNumber(raw.currentPrice, null),
@@ -138,6 +162,11 @@
     }
     if (source === 'coingecko') holding.priceKey = holding.priceKey.toLowerCase();
     if (source === 'cash') holding.currentPrice = 1;
+    const src = SOURCES[source];
+    if (src.options && !src.options.some(([v]) => v === holding.priceOption)) holding.priceOption = src.options[0][0];
+    if (!src.options) holding.priceOption = '';
+    if (src.methods && !src.methods.some(([v]) => v === holding.priceMethod)) holding.priceMethod = src.methods[0][0];
+    if (!src.methods) holding.priceMethod = '';
     return holding;
   }
 

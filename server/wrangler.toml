@@ -1,0 +1,9 @@
+# Deploy with:  npx wrangler deploy   (from this folder)
+name = "investment-tracker-prices"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Set to your app's address (e.g. https://you.github.io) to allow only your app.
+ALLOWED_ORIGIN = "*"
+EBAY_MARKETPLACE = "EBAY_US"

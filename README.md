@@ -30,11 +30,18 @@ an app, works offline, and syncs between devices through a private GitHub Gist.
   | Magic: The Gathering | [Scryfall](https://scryfall.com/): normal / foil / etched | no |
   | Yu-Gi-Oh! | [YGOPRODeck](https://ygoprodeck.com/): TCGplayer, Cardmarket, eBay | no |
   | Cash / savings | Balance in the account's currency | no |
+  | Cards, comics, games by grade | PriceCharting sold-price guide (via your price server) | paid PriceCharting API |
+  | Anything sold on eBay (cards, watches, sneakers, whisky…) | eBay median of matching sold items or listings (via your price server) | free eBay developer keys |
+  | Australian property | Domain suburb median sold price (via your price server) | free Domain key |
+  | UK property | HM Land Registry House Price Index (via your price server) | no |
   | Anything else with a JSON API | Custom URL + JSON path | depends |
   | Watches, sneakers, art, wine, property, sports cards… | Manual valuation | no |
 
-  No free, browser-accessible price API exists for sports cards, watches, sneakers, art, wine or
-  property. Those use manual valuations, or a custom JSON source if you have one.
+  eBay, PriceCharting and property prices need secret keys, so they run through a small free
+  **price server** you deploy yourself (a Cloudflare Worker). See [server/README.md](server/README.md).
+  Property can be valued as the area median, or as your purchase price grown by the area's price
+  change. Art, wine and property outside Australia and the UK have no official valuation API, so
+  they stay manual.
 - **Cloud sync** between computer and phone through a private GitHub Gist. Changes merge
   per holding and per transaction, so edits made offline on two devices are both kept.
 - **Installable app (PWA)**: add it to your home screen and it opens full-screen, even offline.
@@ -53,7 +60,8 @@ an app, works offline, and syncs between devices through a private GitHub Gist.
   Where no history exists (collectibles, manual items, older dates), values are estimated between
   your trade prices and dated manual valuations, and the chart says which holdings are estimated.
 - A dashboard with total value, unrealized and realized gains, and allocation by asset class.
-- Dark mode by default. Light and match-system are available in Settings.
+- A retro terminal look by default: phosphor-green text, pixel numerals and block-meter bars.
+  Dark, light and match-system themes are available in Settings.
 - A holdings table you can sort, search and filter. On phones it switches to a card layout.
 - JSON backup and restore, plus CSV export of holdings and of all transactions. API keys are
   never written to backups.
@@ -105,6 +113,7 @@ js/portfolio.js       Pure model: holdings, transactions, average cost, FX conve
 js/prices.js          Price providers, exchange rates, symbol/card search
 js/sync.js            GitHub Gist sync and the merge rules
 js/charts.js          Dependency-free SVG/HTML charts
+server/worker.js      Price server (Cloudflare Worker): eBay, PriceCharting, property
 js/app.js             State, persistence, rendering and events
 sw.js                 Service worker (offline app shell)
 manifest.webmanifest  PWA manifest

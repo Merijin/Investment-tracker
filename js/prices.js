@@ -209,7 +209,72 @@
     return { price };
   }
 
-  const PROVIDERS = { finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom };
+  // ---------- price server (eBay, PriceCharting, property) ----------
+
+  async function serverGet(settings, fetchFn, path, params) {
+    const keys = settings.keys || {};
+    if (!keys.priceServerUrl) throw new Error('Set up the price server in Settings to use this source.');
+    const url = keys.priceServerUrl.replace(/\/+$/, '') + path + '?' + qs(params);
+    const res = await fetchFn(url, keys.priceServerToken ? { headers: { 'X-App-Token': keys.priceServerToken } } : undefined);
+    let body = {};
+    try { body = await res.json(); } catch { /* not JSON */ }
+    if (!res.ok) {
+      const err = new Error(body.error || `Price server error ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return body;
+  }
+
+  // Search eBay's site for the holding's currency so prices are local.
+  const EBAY_MARKETS = { AUD: 'EBAY_AU', GBP: 'EBAY_GB', EUR: 'EBAY_DE', CAD: 'EBAY_CA' };
+
+  async function ebay(query, { fetchFn, settings, holding }) {
+    const d = await serverGet(settings, fetchFn, '/ebay', {
+      q: query, mode: holding.priceOption || 'sold', marketplace: EBAY_MARKETS[holding.currency] || 'EBAY_US',
+    });
+    return { price: d.price, currency: d.currency, detail: d };
+  }
+
+  async function pricecharting(id, { fetchFn, settings, holding }) {
+    const d = await serverGet(settings, fetchFn, '/pricecharting', { id });
+    const grade = holding.priceOption || 'ungraded';
+    const price = d.prices && d.prices[grade];
+    if (!(price > 0)) {
+      const label = (Portfolio.SOURCES.pricecharting.options.find(([v]) => v === grade) || [, grade])[1];
+      throw new Error(`No ${label} price for this item on PriceCharting`);
+    }
+    return { price, currency: d.currency || 'USD', detail: d };
+  }
+
+  /** Area median at or before a date (or the earliest one if the date is older). */
+  function medianAt(history, date) {
+    let best = history[0];
+    for (const p of history) if (p.date <= date) best = p;
+    return best;
+  }
+
+  /**
+   * Property: either the area median itself, or the purchase price scaled by
+   * how much the area median has moved since the purchase date.
+   */
+  async function property(location, { fetchFn, settings, holding }) {
+    const d = await serverGet(settings, fetchFn, '/property', { location, type: holding.priceOption || 'house' });
+    const base = growthBase(holding, d.history || []);
+    if (holding.priceMethod === 'growth' && base) {
+      return { price: base.price * (d.price / base.median.price), currency: holding.currency, detail: d };
+    }
+    return { price: d.price, currency: d.currency, detail: d };
+  }
+
+  function growthBase(holding, history) {
+    const buy = holding.transactions && [...holding.transactions]
+      .filter((t) => t.type === 'buy' && t.price > 0).sort((a, b) => (a.date < b.date ? -1 : 1))[0];
+    if (!buy || !history.length) return null;
+    return { price: buy.price, date: buy.date, median: medianAt(history, buy.date) };
+  }
+
+  const PROVIDERS = { ebay, pricecharting, property, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom };
 
   /**
    * Refresh every auto-priced holding. Returns new holding objects; failures
@@ -247,7 +312,8 @@
         } else {
           const provider = PROVIDERS[h.priceSource];
           if (!provider) return h;
-          const variant = ['pokemontcg', 'scryfall', 'custom'].includes(h.priceSource) ? '|' + h.subcategory + '|' + h.pricePath : '';
+          const variant = ['pokemontcg', 'scryfall', 'custom', 'ebay', 'pricecharting', 'property'].includes(h.priceSource)
+            ? [h.subcategory, h.pricePath, h.priceOption, h.priceMethod, h.currency, h.id].join('|') : '';
           quote = await lookup(h.priceSource + ':' + h.priceKey + variant, () => provider(h.priceKey, { ...ctx, holding: h }));
           const pence = PENCE_SUFFIX[h.priceSource];
           if (pence && pence.test(h.priceKey)) quote = { price: quote.price / 100, currency: 'GBP' };
@@ -310,6 +376,7 @@
         const token = { XAU: 'pax-gold', XAG: 'kinesis-silver' }[h.priceKey];
         return token ? { kind: 'coingecko', id: token } : null;
       }
+      case 'property': return keys.priceServerUrl ? { kind: 'property', id: h.priceKey } : null;
       case 'twelvedata': return keys.twelvedata ? { kind: 'twelvedata', id: h.priceKey } : null;
       case 'alphavantage': return keys.alphavantage ? { kind: 'alphavantage', id: h.priceKey } : null;
       // Finnhub's free tier has no history; borrow another stock source if a key exists.
@@ -330,8 +397,19 @@
   async function fetchHistory(h, { fetchFn = globalThis.fetch.bind(globalThis), settings = {}, rates = null, days = 365 } = {}) {
     const src = historySource(h, settings);
     if (!src) return null;
-    const { points, currency } = await HISTORY_FETCHERS[src.kind](src.id, { fetchFn, settings, days });
     const convert = Portfolio.makeConverter(rates);
+    if (src.kind === 'property') {
+      const d = await serverGet(settings, fetchFn, '/property', { location: h.priceKey, type: h.priceOption || 'house' });
+      const history = d.history || [];
+      const base = growthBase(h, history);
+      if (h.priceMethod === 'growth' && base) {
+        return history.map((p) => ({ date: p.date, price: base.price * (p.price / base.median.price) }));
+      }
+      const rate = convert(1, d.currency, h.currency);
+      if (rate === null) throw new Error(`No exchange rate for ${d.currency} → ${h.currency}`);
+      return history.map((p) => ({ date: p.date, price: p.price * rate }));
+    }
+    const { points, currency } = await HISTORY_FETCHERS[src.kind](src.id, { fetchFn, settings, days });
     let quoteCurrency = currency || h.currency;
     let divisor = 1;
     const pence = PENCE_SUFFIX[src.kind];
@@ -403,13 +481,46 @@
         const d = await notFoundIsEmpty(getJSON(fetchFn, `https://db.ygoprodeck.com/api/v7/cardinfo.php?${qs({ fname: q, num: 20, offset: 0 })}`));
         return ((d && d.data) || []).map((c) => ({ key: String(c.id), name: c.name, detail: c.type || '' }));
       }
+      case 'pricecharting': {
+        const d = await serverGet(settings, fetchFn, '/pricecharting/search', { q });
+        return (d.products || []).map((p) => ({ key: p.id, name: p.name, detail: p.set }));
+      }
       default:
         return [];
     }
   }
 
+  /**
+   * Try a lookup without saving it, so the user can check an eBay search or
+   * a property location. Returns { price, currency, summary, items }.
+   */
+  async function test(source, key, holding, { fetchFn = globalThis.fetch.bind(globalThis), settings = {} } = {}) {
+    const provider = PROVIDERS[source];
+    if (!provider) throw new Error('Nothing to test for this source.');
+    const { price, currency, detail } = await provider(key, { fetchFn, settings, holding });
+    const d = detail || {};
+    if (source === 'ebay') {
+      return {
+        price, currency,
+        summary: `Median of ${d.count} ${d.mode === 'sold' ? 'sold items' : 'current listings'}` +
+          (d.low ? ` (range ${d.low}–${d.high} ${d.currency})` : '') + (d.dropped ? `, ${d.dropped} outliers ignored` : '') +
+          (d.note ? `. ${d.note}` : ''),
+        items: (d.samples || []).map((i) => ({ name: i.title, detail: `${i.price} ${i.currency}${i.date ? ' · sold ' + i.date : ''}`, url: i.url })),
+      };
+    }
+    if (source === 'property') {
+      return {
+        price, currency,
+        summary: `${d.area}: latest ${d.currency} ${Math.round(d.price).toLocaleString()} (${d.period}). ${d.source}.` +
+          (holding.priceMethod === 'growth' ? ' Your value is your purchase price × the change in the area price since you bought.' : ''),
+        items: (d.history || []).slice(-8).reverse().map((p) => ({ name: p.date, detail: `${d.currency} ${Math.round(p.price).toLocaleString()}` })),
+      };
+    }
+    return { price, currency, summary: '', items: [] };
+  }
+
   return {
-    refreshAll, fetchRates, search, readPath, majorCurrency, fetchHistory, historySource, pickPokemonPrice, pickScryfallPrice,
+    refreshAll, fetchRates, search, test, readPath, majorCurrency, fetchHistory, historySource, medianAt, pickPokemonPrice, pickScryfallPrice,
     coingeckoBatch, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom,
   };
 });
