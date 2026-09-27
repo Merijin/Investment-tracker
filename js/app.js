@@ -722,8 +722,8 @@
     });
     try {
       const r = await Prices.test(src, key, draft, { settings: { keys: state.keys }, fetchFn: fetch.bind(window) });
-      const items = r.items.map((i) => `<div class="sr-item">${i.url
-        ? `<a href="${escapeHTML(i.url)}" target="_blank" rel="noopener">${escapeHTML(i.name)}</a>` : escapeHTML(i.name)}
+      const items = r.items.map((i) => `<div class="sr-item">${/^https:\/\//.test(i.url || '')
+        ? `<a href="${escapeHTML(i.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(i.name)}</a>` : escapeHTML(i.name)}
         <span class="sr-detail">${escapeHTML(i.detail)}</span></div>`).join('');
       box.innerHTML = `<div class="sr-msg"><b>${fmt.price(r.price, r.currency)}</b> per unit · ${escapeHTML(r.summary)}</div>${items}`;
     } catch (err) {

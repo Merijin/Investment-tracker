@@ -97,6 +97,9 @@
     return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
+  // Ids end up in HTML attributes, so anything unusual (e.g. from an edited backup) is replaced.
+  const safeId = (id, prefix) => (typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : newId(prefix));
+
   function normCurrency(c, fallback = 'USD') {
     const s = String(c || '').trim().toUpperCase();
     return /^[A-Z]{3,5}$/.test(s) ? s : fallback;
@@ -105,7 +108,7 @@
   function normalizeTransaction(raw) {
     const type = TX_TYPES[raw.type] ? raw.type : 'buy';
     const tx = {
-      id: raw.id || newId('t'),
+      id: safeId(raw.id, 't'),
       type,
       date: /^\d{4}-\d{2}-\d{2}$/.test(raw.date || '') ? raw.date : new Date().toISOString().slice(0, 10),
       quantity: type === 'income' ? 0 : toNumber(raw.quantity, 0),
@@ -136,7 +139,7 @@
         : [];
     }
     const holding = {
-      id: raw.id || newId('h'),
+      id: safeId(raw.id, 'h'),
       name: String(raw.name || '').trim(),
       category,
       subcategory: String(raw.subcategory || '').trim(),

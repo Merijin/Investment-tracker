@@ -231,3 +231,11 @@ test('estimates before market history join up with its first price', () => {
   assert.equal(m.priceOn('2025-01-05'), 300);
   assert.equal(m.priceOn('2025-01-09'), 500);
 });
+
+test('ids from imported data are sanitised before reaching the page', () => {
+  const h = P.normalizeHolding({ id: '"><img src=x onerror=alert(1)>', name: 'x',
+    transactions: [{ id: 'ok_id-1', type: 'buy', quantity: 1, price: 1 }, { id: 'bad"id', type: 'buy', quantity: 1, price: 1 }] });
+  assert.match(h.id, /^h_[a-z0-9]+$/);
+  assert.equal(h.transactions[0].id, 'ok_id-1');
+  assert.match(h.transactions[1].id, /^t_[a-z0-9]+$/);
+});
