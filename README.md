@@ -30,6 +30,7 @@ an app, works offline, and syncs between devices through a private GitHub Gist.
   | Magic: The Gathering | [Scryfall](https://scryfall.com/): normal / foil / etched | no |
   | Yu-Gi-Oh! | [YGOPRODeck](https://ygoprodeck.com/): TCGplayer, Cardmarket, eBay | no |
   | Cash / savings | Balance in the account's currency | no |
+  | Cards from 89+ games (Pokémon, Magic, Yu-Gi-Oh!, One Piece, Lorcana…) | [TCG API](https://tcgapi.dev/): TCGplayer market price by printing, plus weekly history | free (100 lookups/day) |
   | Cards, comics, games by grade | PriceCharting sold-price guide (via your price server) | paid PriceCharting API |
   | Anything sold on eBay (cards, watches, sneakers, whisky…) | eBay median of matching sold items or listings (via your price server) | free eBay developer keys |
   | Australian property | Domain suburb median sold price (via your price server) | free Domain key |

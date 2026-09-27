@@ -12,6 +12,7 @@ free plan (100,000 requests a day), and you don't have to maintain a server.
 | **eBay sold prices** | The same, using *sold* items like Collectr does. | eBay has to approve your app for the [Marketplace Insights API](https://developer.ebay.com/api-docs/buy/marketplace-insights/static/overview.html) (limited release). Until then, current listings are used. |
 | **PriceCharting** | Sold-price guide by grade (ungraded, 7, 8, 9, 9.5, PSA/BGS/CGC/SGC 10) for Pokémon, sports cards, Magic, Yu-Gi-Oh!, comics, video games. | A PriceCharting subscription that includes [API access](https://www.pricecharting.com/api-documentation). This is paid. |
 | **Australian property** | Median sold price for a suburb (house or unit), quarterly, going back 10 years. | A free [Domain developer](https://developer.domain.com.au/) API key. |
+| **TCG API relay** | Only needed if your browser can't call tcgapi.dev directly. The app tries the direct call first. | Your TCG API key as `TCGAPI_KEY`. |
 | **UK property** | HM Land Registry UK House Price Index: average price by region or council, by property type. | Nothing. It's open data. |
 
 Nothing here scrapes websites. Every source is an official API used within its terms.
@@ -31,6 +32,7 @@ npx wrangler secret put EBAY_CLIENT_ID
 npx wrangler secret put EBAY_CLIENT_SECRET
 npx wrangler secret put PRICECHARTING_TOKEN
 npx wrangler secret put DOMAIN_API_KEY
+npx wrangler secret put TCGAPI_KEY        # only if the app says TCG API calls are blocked
 # After eBay approves Marketplace Insights:
 npx wrangler secret put EBAY_SOLD         # enter: true
 ```

@@ -23,7 +23,7 @@
     { id: 'crypto',      label: 'Crypto',          slot: 2, defaultUnit: 'coins',  sources: ['coingecko', 'manual'] },
     { id: 'etf',         label: 'ETFs & funds',    slot: 3, defaultUnit: 'shares', sources: ['finnhub', 'twelvedata', 'alphavantage', 'manual'] },
     { id: 'metal',       label: 'Precious metals', slot: 4, defaultUnit: 'ozt',    sources: ['metal', 'manual'] },
-    { id: 'collectible', label: 'Collectibles',    slot: 5, defaultUnit: 'items',  sources: ['pricecharting', 'ebay', 'pokemontcg', 'scryfall', 'ygoprodeck', 'manual'] },
+    { id: 'collectible', label: 'Collectibles',    slot: 5, defaultUnit: 'items',  sources: ['tcgapi', 'pricecharting', 'ebay', 'pokemontcg', 'scryfall', 'ygoprodeck', 'manual'] },
     { id: 'real_estate', label: 'Real estate',     slot: 6, defaultUnit: 'properties', sources: ['property', 'manual'] },
     { id: 'bond',        label: 'Bonds',           slot: 7, defaultUnit: 'units',  sources: ['manual', 'twelvedata'] },
     { id: 'cash',        label: 'Cash & savings',  slot: 8, defaultUnit: '',       sources: ['cash', 'manual'] },
@@ -43,6 +43,13 @@
     pokemontcg:   { label: 'Pokémon TCG — card market price', keyLabel: 'Card id', keyHint: 'e.g. base1-4 — use Find to search by name', search: true, quoteCurrency: 'quote' },
     scryfall:     { label: 'Scryfall — Magic: The Gathering', keyLabel: 'Scryfall card id', keyHint: 'Use Find to search. Add "foil" to type/details for foil prices.', search: true, quoteCurrency: 'quote' },
     ygoprodeck:   { label: 'YGOPRODeck — Yu-Gi-Oh!', keyLabel: 'Card id', keyHint: 'Use Find to search by card name', search: true, quoteCurrency: 'quote' },
+    tcgapi: {
+      label: 'TCG API — 89+ card games (TCGplayer market price)', keyLabel: 'TCG API card id',
+      keyHint: 'Pokémon, Magic, Yu-Gi-Oh!, One Piece, Lorcana and more. Use Find to search. Needs a free TCG API key (Settings).',
+      search: 'find', needsKey: 'tcgapi', quoteCurrency: 'USD',
+      optionLabel: 'Printing',
+      options: [['auto', 'Best match'], ['normal', 'Normal / unlimited'], ['foil', 'Foil / holofoil'], ['reverse', 'Reverse holofoil'], ['1st', '1st edition']],
+    },
     pricecharting: {
       label: 'PriceCharting — sold-price guide (cards, comics, games)', keyLabel: 'PriceCharting product id',
       keyHint: 'Use Find to search, then pick the grade. Needs the price server.', search: 'find', server: true, quoteCurrency: 'quote',

@@ -48,7 +48,7 @@
     snapshots: [],
     savedAt: null,
     shared: { baseCurrency: 'USD', updatedAt: '' },               // synced
-    keys: { finnhub: '', twelvedata: '', alphavantage: '', pokemontcg: '', priceServerUrl: '', priceServerToken: '' },
+    keys: { tcgapi: '', finnhub: '', twelvedata: '', alphavantage: '', pokemontcg: '', priceServerUrl: '', priceServerToken: '' },
     device: { theme: 'retro', autoRefresh: true, syncKeys: false, syncToken: '', gistId: '', lastSync: null, retroDefault: true },
     rates: null,          // { rates: {EUR: 0.92, ...}, fetchedAt }
     histories: {},        // device cache: { cacheKey: { fetchedAt, points: [{date, price}] | null, error } }
@@ -394,7 +394,7 @@
     if (historyStatus) note.push(historyStatus);
     if (est.length) {
       note.push(`Estimated between known prices for ${est.length <= 3 ? est.join(', ') : est.slice(0, 3).join(', ') + ` and ${est.length - 3} more`}` +
-        ' (no free price history for them).');
+        ' where no market price history covers the period.');
     }
     note.push('Return % excludes money added or withdrawn.');
     $('#chart-note').textContent = note.join(' ');
@@ -422,7 +422,7 @@
     if (!todo.length) return;
     fetchingHistory = true;
     // Free tiers allow only a few requests a minute, so fetch one at a time.
-    const gap = { coingecko: 2500, twelvedata: 8000, alphavantage: 15000 };
+    const gap = { coingecko: 2500, twelvedata: 8000, alphavantage: 15000, tcgapi: 1500 };
     const limited = new Set();
     try {
       for (let i = 0; i < todo.length; i++) {
@@ -552,8 +552,12 @@
     setStatus(onlyIds ? 'Fetching price…' : 'Refreshing prices…');
     try {
       await refreshRates(!onlyIds);
+      // Sources that update daily on small free quotas are refreshed at most every 6 hours.
+      const SLOW = { tcgapi: 6 * 3600000 };
+      const fresh = (h) => SLOW[h.priceSource] && !h.priceError && h.priceUpdatedAt &&
+        Date.now() - Date.parse(h.priceUpdatedAt) < SLOW[h.priceSource];
       const targets = state.holdings.filter((h) => !['manual', 'cash'].includes(h.priceSource) &&
-        (!onlyIds || onlyIds.includes(h.id)) && (onlyIds || !P.holdingMetrics(h).closed));
+        (!onlyIds || onlyIds.includes(h.id)) && (onlyIds || (!P.holdingMetrics(h).closed && !fresh(h))));
       const updated = await Prices.refreshAll(targets, {
         settings: { keys: state.keys }, rates: state.rates && state.rates.rates, fetchFn: fetch.bind(window),
       });
@@ -1045,7 +1049,7 @@
         if (!res.ok) throw new Error(d.error || `Error ${res.status}`);
         const on = (b) => (b ? '✓' : '✗');
         info.textContent = `Connected. ${on(d.sources.ebay)} eBay${d.sources.ebay ? (d.sources.ebaySold ? ' (sold prices)' : ' (listings only)') : ''} · ` +
-          `${on(d.sources.pricecharting)} PriceCharting · ${on(d.sources.domain)} AU property · ${on(d.sources.ukhpi)} UK property`;
+          `${on(d.sources.pricecharting)} PriceCharting · ${on(d.sources.tcgapi)} TCG API relay · ${on(d.sources.domain)} AU property · ${on(d.sources.ukhpi)} UK property`;
       } catch (err) {
         info.textContent = '⚠ ' + (err.message === 'Failed to fetch' ? 'Could not reach that address.' : err.message);
       }

@@ -226,6 +226,93 @@
     return body;
   }
 
+  // ---------- TCG API (tcgapi.dev) ----------
+
+  const TCGAPI = 'https://api.tcgapi.dev/v1';
+
+  async function tcgapiGet(path, params, { fetchFn, settings }) {
+    const key = requireKey(settings, 'tcgapi', 'TCG API');
+    const url = TCGAPI + path + (params ? '?' + qs(params) : '');
+    try {
+      return await getJSON(fetchFn, url, { 'X-API-Key': key });
+    } catch (err) {
+      // A network-level failure (no HTTP status) usually means the browser blocked a
+      // cross-site request; the price server can relay it if one is set up.
+      if (err.status || !(settings.keys && settings.keys.priceServerUrl)) throw err;
+      return serverGet(settings, fetchFn, '/tcgapi', { path, ...(params || {}) });
+    }
+  }
+
+  const listOf = (d) => (Array.isArray(d) ? d : (d && (d.data || d.results || d.cards || d.items)) || []);
+  const first = (...vals) => vals.map(num).find((v) => v > 0);
+
+  /** All priced printings of a card, whichever response shape the API used. */
+  function tcgPrintings(card) {
+    const out = [];
+    const table = card.prices || card.printings;
+    if (Array.isArray(table)) {
+      for (const p of table) {
+        out.push({ printing: String(p.printing || p.printing_type || p.sub_type || p.type || 'Normal'),
+          price: first(p.market_price, p.price, p.median_price, p.low_price) });
+      }
+    } else if (table && typeof table === 'object') {
+      for (const [name, p] of Object.entries(table)) {
+        out.push({ printing: name, price: typeof p === 'object' && p ? first(p.market_price, p.price, p.median_price) : num(p) });
+      }
+    }
+    const obj = card.price && typeof card.price === 'object' ? card.price : {};
+    const market = first(card.market_price, obj.market_price, typeof card.price === 'object' ? NaN : card.price);
+    if (market > 0 && !out.length) out.push({ printing: 'Normal', price: market });
+    const foil = first(card.foil_price, obj.foil_price);
+    if (foil > 0 && !out.some((p) => /foil|holo/i.test(p.printing))) out.push({ printing: 'Foil', price: foil });
+    return out.filter((p) => p.price > 0);
+  }
+
+  const PRINTING_MATCH = {
+    normal: (n) => /normal|unlimited/.test(n) && !/foil|holo/.test(n),
+    foil: (n) => /foil|holo/.test(n) && !/reverse/.test(n),
+    reverse: (n) => /reverse/.test(n),
+    '1st': (n) => /1st|first/.test(n),
+  };
+
+  function pickTcgPrinting(printings, option, hint) {
+    if (!printings.length) return null;
+    const name = (p) => p.printing.toLowerCase();
+    const match = PRINTING_MATCH[option];
+    if (match) return printings.find((p) => match(name(p))) || null;
+    // "Best match": a printing named in the type/details, else the first listed.
+    const h = (hint || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const named = h && printings
+      .filter((p) => h.includes(name(p).replace(/[^a-z0-9]/g, '')))
+      .sort((a, b) => b.printing.length - a.printing.length)[0];
+    return named || printings[0];
+  }
+
+  async function tcgapi(id, { fetchFn, settings, holding }) {
+    const d = await tcgapiGet(`/cards/${encodeURIComponent(id)}`, null, { fetchFn, settings });
+    const card = d && d.data && !Array.isArray(d.data) ? d.data : d;
+    const printings = tcgPrintings(card || {});
+    const pick = pickTcgPrinting(printings, holding.priceOption || 'auto', holding.subcategory);
+    if (!pick) {
+      throw new Error(printings.length ? `No ${holding.priceOption} printing priced (have: ${printings.map((p) => p.printing).join(', ')})`
+        : 'No market price listed for this card');
+    }
+    return { price: pick.price, currency: 'USD' };
+  }
+
+  async function tcgapiHistory(id, { fetchFn, settings, holding }) {
+    const d = await tcgapiGet(`/cards/${encodeURIComponent(id)}/history`, null, { fetchFn, settings });
+    const rows = listOf(d && d.data && !Array.isArray(d.data) ? (d.data.history || d.data.prices || []) : d);
+    // Keep the printing that the current price uses, when rows say which one they are.
+    const printings = [...new Set(rows.map((r) => r.printing).filter(Boolean))].map((printing) => ({ printing, price: 1 }));
+    const pick = pickTcgPrinting(printings, holding.priceOption || 'auto', holding.subcategory);
+    const chosen = rows.filter((r) => !pick || !r.printing || r.printing === pick.printing);
+    return {
+      points: dailyPoints(chosen.map((r) => [String(r.date || r.recorded_at || '').slice(0, 10), first(r.market_price, r.price, r.avg_sales_price)])),
+      currency: 'USD',
+    };
+  }
+
   // Search eBay's site for the holding's currency so prices are local.
   const EBAY_MARKETS = { AUD: 'EBAY_AU', GBP: 'EBAY_GB', EUR: 'EBAY_DE', CAD: 'EBAY_CA' };
 
@@ -274,7 +361,7 @@
     return { price: buy.price, date: buy.date, median: medianAt(history, buy.date) };
   }
 
-  const PROVIDERS = { ebay, pricecharting, property, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom };
+  const PROVIDERS = { tcgapi, ebay, pricecharting, property, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom };
 
   /**
    * Refresh every auto-priced holding. Returns new holding objects; failures
@@ -312,7 +399,7 @@
         } else {
           const provider = PROVIDERS[h.priceSource];
           if (!provider) return h;
-          const variant = ['pokemontcg', 'scryfall', 'custom', 'ebay', 'pricecharting', 'property'].includes(h.priceSource)
+          const variant = ['pokemontcg', 'scryfall', 'custom', 'ebay', 'pricecharting', 'property', 'tcgapi'].includes(h.priceSource)
             ? [h.subcategory, h.pricePath, h.priceOption, h.priceMethod, h.currency, h.id].join('|') : '';
           quote = await lookup(h.priceSource + ':' + h.priceKey + variant, () => provider(h.priceKey, { ...ctx, holding: h }));
           const pence = PENCE_SUFFIX[h.priceSource];
@@ -377,6 +464,7 @@
         return token ? { kind: 'coingecko', id: token } : null;
       }
       case 'property': return keys.priceServerUrl ? { kind: 'property', id: h.priceKey } : null;
+      case 'tcgapi': return keys.tcgapi ? { kind: 'tcgapi', id: h.priceKey } : null;
       case 'twelvedata': return keys.twelvedata ? { kind: 'twelvedata', id: h.priceKey } : null;
       case 'alphavantage': return keys.alphavantage ? { kind: 'alphavantage', id: h.priceKey } : null;
       // Finnhub's free tier has no history; borrow another stock source if a key exists.
@@ -388,7 +476,7 @@
     }
   }
 
-  const HISTORY_FETCHERS = { coingecko: coingeckoHistory, twelvedata: twelvedataHistory, alphavantage: alphavantageHistory };
+  const HISTORY_FETCHERS = { tcgapi: tcgapiHistory, coingecko: coingeckoHistory, twelvedata: twelvedataHistory, alphavantage: alphavantageHistory };
 
   /**
    * Daily price history for a holding, in the holding's own currency and unit.
@@ -409,7 +497,7 @@
       if (rate === null) throw new Error(`No exchange rate for ${d.currency} → ${h.currency}`);
       return history.map((p) => ({ date: p.date, price: p.price * rate }));
     }
-    const { points, currency } = await HISTORY_FETCHERS[src.kind](src.id, { fetchFn, settings, days });
+    const { points, currency } = await HISTORY_FETCHERS[src.kind](src.id, { fetchFn, settings, days, holding: h });
     let quoteCurrency = currency || h.currency;
     let divisor = 1;
     const pence = PENCE_SUFFIX[src.kind];
@@ -481,6 +569,18 @@
         const d = await notFoundIsEmpty(getJSON(fetchFn, `https://db.ygoprodeck.com/api/v7/cardinfo.php?${qs({ fname: q, num: 20, offset: 0 })}`));
         return ((d && d.data) || []).map((c) => ({ key: String(c.id), name: c.name, detail: c.type || '' }));
       }
+      case 'tcgapi': {
+        const d = await tcgapiGet('/search', { q, limit: 20 }, { fetchFn, settings });
+        return listOf(d).slice(0, 20).map((c) => {
+          const set = typeof c.set === 'object' && c.set ? c.set.name : c.set || c.set_name;
+          const game = typeof c.game === 'object' && c.game ? c.game.name : c.game || c.game_name;
+          const price = first(c.market_price, c.price && typeof c.price === 'object' ? c.price.market_price : c.price);
+          return {
+            key: String(c.id), name: c.name,
+            detail: [game, set, c.number ? '#' + c.number : '', c.rarity, price ? '$' + price.toFixed(2) : ''].filter(Boolean).join(' · '),
+          };
+        });
+      }
       case 'pricecharting': {
         const d = await serverGet(settings, fetchFn, '/pricecharting/search', { q });
         return (d.products || []).map((p) => ({ key: p.id, name: p.name, detail: p.set }));
@@ -520,7 +620,7 @@
   }
 
   return {
-    refreshAll, fetchRates, search, test, readPath, majorCurrency, fetchHistory, historySource, medianAt, pickPokemonPrice, pickScryfallPrice,
+    refreshAll, fetchRates, search, test, tcgPrintings, pickTcgPrinting, readPath, majorCurrency, fetchHistory, historySource, medianAt, pickPokemonPrice, pickScryfallPrice,
     coingeckoBatch, finnhub, twelvedata, alphavantage, metal, pokemontcg, scryfall, ygoprodeck, custom,
   };
 });

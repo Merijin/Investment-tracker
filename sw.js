@@ -3,7 +3,7 @@
  * connection. Same-origin files use stale-while-revalidate (instant load,
  * updated in the background); price/sync API calls always go to the network.
  */
-const CACHE = 'investment-tracker-v3';
+const CACHE = 'investment-tracker-v3.1';
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
   'js/portfolio.js', 'js/prices.js', 'js/sync.js', 'js/charts.js', 'js/app.js',

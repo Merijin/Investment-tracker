@@ -10,6 +10,7 @@
  *   GET /pricecharting?id=          PriceCharting prices by grade
  *   GET /pricecharting/search?q=    find PriceCharting products
  *   GET /property?location=&type=   area median property price + history
+ *   GET /tcgapi?path=/cards/ID      relay to tcgapi.dev (if the browser can't call it)
  *
  * Secrets (set with `wrangler secret put NAME`):
  *   APP_TOKEN            access code the app must send (recommended)
@@ -17,10 +18,11 @@
  *   EBAY_SOLD            "true" once eBay grants Marketplace Insights access
  *   PRICECHARTING_TOKEN  PriceCharting API token (paid subscription)
  *   DOMAIN_API_KEY       Domain developer key (Australian suburb medians)
+ *   TCGAPI_KEY           tcgapi.dev key, only needed for the relay
  * Optional: ALLOWED_ORIGIN (default "*"), EBAY_MARKETPLACE (default EBAY_US).
  */
 
-const CACHE_SECONDS = { '/ebay': 6 * 3600, '/pricecharting': 12 * 3600, '/pricecharting/search': 86400, '/property': 86400 };
+const CACHE_SECONDS = { '/tcgapi': 6 * 3600, '/ebay': 6 * 3600, '/pricecharting': 12 * 3600, '/pricecharting/search': 86400, '/property': 86400 };
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -239,6 +241,17 @@ export async function property(params, env, fetchFn) {
   return loc.country === 'AU' ? domainMedian(loc, type, env, fetchFn) : ukHpi(loc, type, fetchFn);
 }
 
+/** Relay to tcgapi.dev for browsers that can't call it directly. Card and search paths only. */
+export async function tcgapiRelay(params, env, fetchFn) {
+  if (!env.TCGAPI_KEY) throw new HttpError(501, 'TCG API key is not set on the price server.');
+  const path = params.get('path') || '';
+  if (!/^\/(search|cards\/[\w.-]+(\/history)?)$/.test(path)) throw new HttpError(400, 'Unsupported TCG API path.');
+  const rest = new URLSearchParams(params);
+  rest.delete('path');
+  const query = rest.toString();
+  return getJSON(fetchFn, `https://api.tcgapi.dev/v1${path}${query ? '?' + query : ''}`, { headers: { 'X-API-Key': env.TCGAPI_KEY } });
+}
+
 function health(params, env) {
   return {
     ok: true,
@@ -247,6 +260,7 @@ function health(params, env) {
       ebaySold: env.EBAY_SOLD === 'true',
       pricecharting: !!env.PRICECHARTING_TOKEN,
       domain: !!env.DOMAIN_API_KEY,
+      tcgapi: !!env.TCGAPI_KEY,
       ukhpi: true,
     },
   };
@@ -254,7 +268,7 @@ function health(params, env) {
 
 export const ROUTES = {
   '/health': health, '/ebay': ebay, '/pricecharting': pricecharting,
-  '/pricecharting/search': pricechartingSearch, '/property': property,
+  '/pricecharting/search': pricechartingSearch, '/property': property, '/tcgapi': tcgapiRelay,
 };
 
 function corsHeaders(env) {

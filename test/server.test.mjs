@@ -141,3 +141,13 @@ test('UK House Price Index: latest published month plus yearly history', async (
   const det = await get('/property?location=Manchester&type=detached', {}, fetchFn);
   assert.equal(det.body.price, 400000);
 });
+
+test('TCG API relay only forwards card and search paths', async () => {
+  const fetchFn = fakeFetch({ 'https://api.tcgapi.dev/v1/cards/42': { data: { id: 42 } } });
+  const env = { TCGAPI_KEY: 'tk' };
+  const ok = await get('/tcgapi?path=%2Fcards%2F42', env, fetchFn);
+  assert.equal(ok.status, 200);
+  assert.equal(fetchFn.calls[0].init.headers['X-API-Key'], 'tk');
+  assert.equal((await get('/tcgapi?path=%2Fadmin', env, fetchFn)).status, 400);
+  assert.equal((await get('/tcgapi?path=%2Fcards%2F42', {}, fetchFn)).status, 501);
+});

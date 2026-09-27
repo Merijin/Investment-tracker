@@ -252,3 +252,59 @@ test('pricecharting search goes through the server', async () => {
   assert.deepEqual(await Prices.search('pricecharting', 'charizard', { fetchFn, settings: server }),
     [{ key: '6910', name: 'Charizard #4', detail: 'Pokemon Base Set' }]);
 });
+
+test('TCG API: both documented response shapes, printing choice, search and history', async () => {
+  const tcgKeys = { keys: { tcgapi: 'tcg_live_x' } };
+  const perPrinting = { data: { id: 42, name: 'Charizard', prices: [
+    { printing: 'Unlimited Holofoil', market_price: 410.5, low_price: 380 },
+    { printing: '1st Edition Holofoil', market_price: 9800 },
+  ] } };
+  const flat = { id: 7, name: 'Pikachu', price: { market_price: 12.47, foil_price: 30 } };
+  const fetchFn = fakeFetch({
+    'https://api.tcgapi.dev/v1/cards/42/history': { data: [
+      { date: '2026-09-01', printing: 'Unlimited Holofoil', market_price: 400 },
+      { date: '2026-09-01', printing: '1st Edition Holofoil', market_price: 9500 },
+      { date: '2026-09-08', printing: 'Unlimited Holofoil', market_price: 410.5 },
+    ] },
+    'https://api.tcgapi.dev/v1/cards/42': perPrinting,
+    'https://api.tcgapi.dev/v1/cards/7': flat,
+    'https://api.tcgapi.dev/v1/search': { data: [{ id: 42, name: 'Charizard', game: 'Pokemon', set: { name: 'Base Set' }, number: '4', rarity: 'Holo Rare', price: 410.5 }] },
+  });
+  const card = (o) => h({ category: 'collectible', priceSource: 'tcgapi', ...o });
+  const [auto, first, reverse, pika, pikaFoil] = await Prices.refreshAll([
+    card({ priceKey: '42' }),
+    card({ priceKey: '42', priceOption: '1st' }),
+    card({ priceKey: '42', priceOption: 'reverse' }),
+    card({ priceKey: '7' }),
+    card({ priceKey: '7', priceOption: 'foil' }),
+  ], { fetchFn, now, settings: tcgKeys });
+  assert.equal(auto.currentPrice, 410.5);
+  assert.equal(first.currentPrice, 9800);
+  assert.match(reverse.priceError, /No reverse printing priced \(have: Unlimited Holofoil, 1st Edition Holofoil\)/);
+  assert.equal(pika.currentPrice, 12.47);
+  assert.equal(pikaFoil.currentPrice, 30);
+  assert.equal(fetchFn.calls.find((c) => c.url.includes('/cards/42')).opts.headers['X-API-Key'], 'tcg_live_x');
+
+  const found = await Prices.search('tcgapi', 'charizard', { fetchFn, settings: tcgKeys });
+  assert.deepEqual(found[0], { key: '42', name: 'Charizard', detail: 'Pokemon · Base Set · #4 · Holo Rare · $410.50' });
+
+  const hist = await Prices.fetchHistory(card({ priceKey: '42' }), { fetchFn, settings: tcgKeys });
+  assert.deepEqual(hist, [{ date: '2026-09-01', price: 400 }, { date: '2026-09-08', price: 410.5 }]);
+});
+
+test('TCG API falls back to the price server relay when the browser blocks the call', async () => {
+  const calls = [];
+  const fetchFn = async (url) => {
+    calls.push(url);
+    if (url.startsWith('https://api.tcgapi.dev')) throw new TypeError('Failed to fetch');
+    return { ok: true, status: 200, json: async () => ({ data: { prices: [{ printing: 'Normal', market_price: 5 }] } }) };
+  };
+  const settings = { keys: { tcgapi: 'k', priceServerUrl: 'https://prices.example' } };
+  const [c] = await Prices.refreshAll([h({ category: 'collectible', priceSource: 'tcgapi', priceKey: '9' })], { fetchFn, now, settings });
+  assert.equal(c.currentPrice, 5);
+  assert.ok(calls[1].startsWith('https://prices.example/tcgapi?path=%2Fcards%2F9'));
+  // Without a price server the original error is shown.
+  const [d] = await Prices.refreshAll([h({ category: 'collectible', priceSource: 'tcgapi', priceKey: '9' })],
+    { fetchFn, now, settings: { keys: { tcgapi: 'k' } } });
+  assert.match(d.priceError, /Failed to fetch/);
+});
