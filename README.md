@@ -95,6 +95,15 @@ npm start            # python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
+## Check the live TCG API
+
+```bash
+TCGAPI_KEY=tcg_live_... node scripts/check-tcgapi.js charizard
+```
+
+This makes a search, a price lookup and a history lookup (3 of your 100 free daily requests). It prints the
+raw responses and whether the app understood them.
+
 ## Tests
 
 ```bash
