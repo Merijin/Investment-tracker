@@ -1,16 +1,24 @@
 /*
- * Offline support: the app shell is cached so the tracker opens without a
- * connection. Same-origin files use stale-while-revalidate (instant load,
- * updated in the background); price/sync API calls always go to the network.
+ * Offline support. When online, the app always loads the latest files from
+ * the server (falling back to the saved copy if the network is slow or down);
+ * when offline, it runs from the saved copy. Price and sync API calls are
+ * never cached.
  */
-const CACHE = 'investment-tracker-v1.1';
+importScripts('js/version.js');
+const CACHE = 'investment-tracker-' + self.APP_VERSION;
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
-  'js/portfolio.js', 'js/prices.js', 'js/sync.js', 'js/charts.js', 'js/app.js',
+  'js/version.js', 'js/portfolio.js', 'js/prices.js', 'js/sync.js', 'js/charts.js', 'js/app.js',
 ];
+const NETWORK_TIMEOUT_MS = 4000;
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the browser's HTTP cache, so an old copy can't be saved as the new version.
+  event.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -23,10 +31,23 @@ self.addEventListener('activate', (event) => {
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
+async function fromNetwork(request, cache) {
+  const res = await fetch(request, { cache: 'no-cache' });
+  if (res.ok) cache.put(request, res.clone());
+  return res;
+}
+
+async function fromCache(request, cache) {
+  const hit = await cache.match(request, { ignoreSearch: true });
+  if (hit) return hit;
+  if (request.mode === 'navigate') return cache.match('index.html');
+  return undefined;
+}
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return;
-  // Fonts: cache-first, so the retro look survives offline.
+  // Fonts never change: cache-first, so the retro look survives offline.
   if (FONT_HOSTS.includes(url.hostname)) {
     event.respondWith(caches.open(CACHE).then(async (cache) => {
       const hit = await cache.match(event.request);
@@ -38,16 +59,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.origin !== self.location.origin) return;
-  event.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(event.request, { ignoreSearch: true });
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res.ok) cache.put(event.request, res.clone());
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    }),
-  );
+  // App files: network first, so updates show straight away.
+  event.respondWith(caches.open(CACHE).then(async (cache) => {
+    const network = fromNetwork(event.request, cache);
+    const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
+    try {
+      const res = await Promise.race([network, timeout]);
+      if (res) return res;
+      // Slow network: use the saved copy now; the download still updates the cache.
+      return (await fromCache(event.request, cache)) || (await network);
+    } catch {
+      return (await fromCache(event.request, cache)) || Response.error();
+    }
+  }));
 });

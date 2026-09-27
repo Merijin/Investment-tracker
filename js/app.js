@@ -1034,6 +1034,7 @@
     settingsForm.syncKeys.checked = !!state.device.syncKeys;
     for (const k of Object.keys(state.keys)) settingsForm['key_' + k].value = state.keys[k] || '';
     renderSyncStatus();
+    $('#app-version').textContent = `Investment Tracker ${self.APP_VERSION || ''}`;
     settingsDialog.showModal();
   }
 
@@ -1333,6 +1334,25 @@
   })();
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service worker not registered', err));
+    // When a new version takes over, reload once so it's used straight away,
+    // unless a form is open, in which case the user is told instead.
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return;
+      if (document.querySelector('dialog[open]')) {
+        setStatus('An update is ready. Reload the page to use it.');
+        return;
+      }
+      reloading = true;
+      location.reload();
+    });
+    navigator.serviceWorker.register('sw.js?v=' + encodeURIComponent(self.APP_VERSION || ''), { updateViaCache: 'none' })
+      .then((reg) => {
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') reg.update().catch(() => {});
+        });
+      })
+      .catch((err) => console.warn('Service worker not registered', err));
   }
 })();
