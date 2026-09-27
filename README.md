@@ -9,6 +9,14 @@ an app, works offline, and syncs between devices through a private GitHub Gist.
 
 ## Features
 
+- **Multiple portfolios.**
+  - Keep separate portfolios, e.g. Long-term, Trading, Pokémon collection or Kids' savings, and switch between
+    them at the top of the page, or view **All portfolios** combined.
+  - The combined view has a per-portfolio breakdown (value, gain, share). Every holding is tagged with its
+    portfolio, and search matches portfolio names too.
+  - Create, rename and delete portfolios. When deleting, move the holdings elsewhere or delete them.
+    Use Edit to move a holding.
+  - Portfolios sync between devices.
 - **Buy / sell / income transactions.** Quantity, average cost, cost basis, realized gains and
   income (dividends, interest, staking) are all calculated from your transaction history using the
   average-cost method. You can't sell more than you held on a given date. Fully sold positions are

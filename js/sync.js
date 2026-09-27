@@ -8,6 +8,7 @@
  *  - transactions: union by id inside each holding, newer `updatedAt` wins;
  *  - deletions: tombstones in `deleted` ({ id: deletedAt }) beat older edits;
  *  - snapshots: union by date, the newer document wins on the same day;
+ *  - portfolios: union by id, the newer `updatedAt` wins (renames), tombstones delete;
  *  - settings: whole object from whichever side changed it last.
  */
 (function (root, factory) {
@@ -71,12 +72,22 @@
     for (const s of newerDoc.snapshots || []) snaps.set(s.date, s);
     const snapshots = [...snaps.values()].sort((x, y) => (x.date < y.date ? -1 : 1));
 
+    const pmap = new Map();
+    for (const p of [...(a.portfolios || []), ...(b.portfolios || [])]) {
+      const prev = pmap.get(p.id);
+      if (!prev || ts(p) > ts(prev)) pmap.set(p.id, p);
+    }
+    // A portfolio is kept while any holding still points at it.
+    const used = new Set(holdings.map((h) => h.portfolioId));
+    const portfolios = [...pmap.values()].filter((p) => used.has(p.id) || alive(p, deleted));
+
     const settings = ts(a.settings) >= ts(b.settings) ? a.settings : b.settings;
     return {
       app: 'investment-tracker',
       version: 2,
       savedAt: newer(a.savedAt, b.savedAt),
       holdings,
+      portfolios,
       deleted,
       snapshots,
       settings,

@@ -465,3 +465,27 @@ dialog.wide { width: min(860px, calc(100vw - 32px)); }
   [data-theme="retro"] .stat-value { font-size: 21px; }
   [data-theme="retro"] h1 { font-size: 24px; }
 }
+
+/* ---- portfolios ---- */
+.portfolio-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.portfolio-bar .pb-label { font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.08em; }
+.portfolio-bar select { width: auto; min-width: 220px; max-width: 100%; font-weight: 600; }
+.pb-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.portfolio-table { min-width: 520px; }
+.portfolio-table tr[data-portfolio] { cursor: pointer; }
+.portfolio-table tr[data-portfolio]:hover td { background: var(--surface-2); }
+.portfolio-tag { display: block; width: fit-content; font-size: 11px; padding: 1px 6px; margin-top: 4px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); }
+[data-theme="retro"] .portfolio-tag { border-radius: 2px; color: var(--series-1); border-color: color-mix(in srgb, var(--series-1) 40%, transparent); }
+[data-theme="retro"] .portfolio-bar select { color: var(--accent); }
+#portfolio-delete-options { display: grid; gap: 8px; }
+#portfolio-delete-options label.check { flex-wrap: wrap; }
+#portfolio-delete-options select { width: auto; }
+@media (max-width: 640px) {
+  .portfolio-table { min-width: 0; }
+  .portfolio-table th:nth-child(2), .portfolio-table td:nth-child(2) { display: none; }
+  .portfolio-table td, .portfolio-table th { padding-left: 4px; padding-right: 4px; }
+}
+@media (max-width: 560px) {
+  .portfolio-bar select { flex: 1; min-width: 0; }
+  .pb-actions { width: 100%; }
+}

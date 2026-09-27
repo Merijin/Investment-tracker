@@ -123,3 +123,22 @@ test('syncOnce recreates a deleted gist and reports bad tokens', async () => {
   assert.equal(r.gistId, 'g1');
   await assert.rejects(Sync.syncOnce({ token: 'bad', gistId: '', local: doc({}), fetchFn: gh.fetchFn }), /rejected the token/);
 });
+
+test('portfolios merge: renames win by date, deletions stick unless still used', () => {
+  const a = doc({ portfolios: [{ id: 'p1', name: 'Old name', updatedAt: T(1) }, { id: 'p2', name: 'Gone', updatedAt: T(1) }] });
+  const b = doc({ portfolios: [{ id: 'p1', name: 'New name', updatedAt: T(5) }, { id: 'p3', name: 'Phone only', updatedAt: T(2) }],
+    deleted: { p2: T(3) } });
+  const m = Sync.mergeDocs(a, b, NOW);
+  assert.deepEqual(m.portfolios.map((p) => p.name).sort(), ['New name', 'Phone only']);
+  // A deleted portfolio is kept if another device still has a holding in it.
+  const c = doc({ holdings: [holding('h', T(9), { portfolioId: 'p2' })], portfolios: [{ id: 'p2', name: 'Gone', updatedAt: T(1) }] });
+  assert.ok(Sync.mergeDocs(c, b, NOW).portfolios.some((p) => p.id === 'p2'));
+});
+
+test("a new device's placeholder portfolio never overwrites a real name", () => {
+  const P = require('../js/portfolio.js');
+  const phone = doc({ portfolios: P.normalizePortfolios([]) });
+  const laptop = doc({ portfolios: [{ id: P.DEFAULT_PORTFOLIO, name: 'Long-term', updatedAt: T(1) }] });
+  assert.equal(Sync.mergeDocs(phone, laptop, NOW).portfolios[0].name, 'Long-term');
+  assert.equal(Sync.mergeDocs(laptop, phone, NOW).portfolios[0].name, 'Long-term');
+});
