@@ -33,6 +33,16 @@
   </header>
 
   <main class="container">
+    <section class="portfolio-bar" id="portfolio-bar" aria-label="Portfolio" hidden>
+      <label for="portfolio-select" class="pb-label">Portfolio</label>
+      <select id="portfolio-select"></select>
+      <div class="pb-actions">
+        <button class="btn" data-action="new-portfolio">+ New</button>
+        <button class="btn" data-action="rename-portfolio" id="btn-rename-portfolio">Rename</button>
+        <button class="btn btn-danger" data-action="delete-portfolio" id="btn-delete-portfolio">Delete</button>
+      </div>
+    </section>
+
     <section id="empty-state" class="card empty" hidden>
       <h2>Track everything you own, in one place</h2>
       <p class="muted">Stocks, ETFs, crypto, gold &amp; silver, Pokémon and Magic cards, watches, property, cash in any currency.
@@ -41,6 +51,15 @@
         <button class="btn btn-primary" data-action="add">+ Add your first investment</button>
         <button class="btn" data-action="sample">Load sample portfolio</button>
         <button class="btn" data-action="settings">Set up sync</button>
+      </div>
+    </section>
+
+    <section id="empty-portfolio" class="card empty" hidden>
+      <h2 id="empty-portfolio-title">This portfolio is empty</h2>
+      <p class="muted">Add an investment to it, or move holdings here from another portfolio with Edit.</p>
+      <div class="row gap">
+        <button class="btn btn-primary" data-action="add">+ Add investment</button>
+        <button class="btn" data-action="show-all">View all portfolios</button>
       </div>
     </section>
 
@@ -68,6 +87,16 @@
         </div>
       </section>
       <p id="fx-warning" class="notice" hidden></p>
+
+      <section class="card" id="portfolio-overview" hidden>
+        <div class="card-head"><h2>Portfolios</h2></div>
+        <div class="table-wrap">
+          <table class="holdings portfolio-table">
+            <thead><tr><th>Name</th><th class="num">Holdings</th><th class="num">Value</th><th class="num">Gain / loss</th><th class="num">% of total</th></tr></thead>
+            <tbody id="portfolio-body"></tbody>
+          </table>
+        </div>
+      </section>
 
       <section class="charts">
         <div class="card">
@@ -137,6 +166,9 @@
       <div class="grid2">
         <label class="span2"><span>Name</span>
           <input name="name" required placeholder="e.g. Apple, Bitcoin, Charizard Base Set">
+        </label>
+        <label class="span2" id="portfolio-field"><span>Portfolio</span>
+          <select name="portfolioId" id="holding-portfolio"></select>
         </label>
         <label><span>Asset class</span>
           <select name="category"></select>
@@ -265,6 +297,27 @@
       <div class="dialog-actions">
         <button type="button" class="btn" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Create / rename / delete a portfolio -->
+  <dialog id="portfolio-dialog">
+    <form id="portfolio-form" method="dialog" novalidate>
+      <h2 id="portfolio-dialog-title">New portfolio</h2>
+      <label id="portfolio-name-field"><span>Name</span>
+        <input name="name" id="portfolio-name" maxlength="60" placeholder="e.g. Retirement, Pokémon collection, Kids' savings">
+      </label>
+      <div id="portfolio-delete-options" hidden>
+        <p id="portfolio-delete-text"></p>
+        <label class="check"><input type="radio" name="deleteMode" value="move" checked> Move its holdings to
+          <select id="portfolio-move-target" name="moveTarget"></select></label>
+        <label class="check"><input type="radio" name="deleteMode" value="delete"> Delete its holdings too</label>
+      </div>
+      <p id="portfolio-errors" class="error" role="alert"></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary" id="portfolio-submit">Create</button>
       </div>
     </form>
   </dialog>

@@ -44,6 +44,7 @@
   // ---------- state & persistence ----------
   const state = {
     holdings: [],
+    portfolios: P.normalizePortfolios([]),
     deleted: {},
     snapshots: [],
     savedAt: null,
@@ -53,7 +54,7 @@
     rates: null,          // { rates: {EUR: 0.92, ...}, fetchedAt }
     histories: {},        // device cache: { cacheKey: { fetchedAt, points: [{date, price}] | null, error } }
     lastRefresh: null,
-    ui: { sort: 'value', asc: false, search: '', category: 'all', range: '1y', mode: 'value', showClosed: false, detailsId: null },
+    ui: { sort: 'value', asc: false, search: '', category: 'all', range: '1y', mode: 'value', showClosed: false, detailsId: null, portfolio: 'all' },
   };
 
   const nowISO = () => new Date().toISOString();
@@ -67,6 +68,7 @@
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
       if (!saved) return;
       state.holdings = (saved.holdings || []).map(P.normalizeHolding);
+      state.portfolios = P.normalizePortfolios(saved.portfolios, state.holdings);
       state.deleted = saved.deleted || {};
       state.snapshots = saved.snapshots || [];
       state.savedAt = saved.savedAt || null;
@@ -76,6 +78,7 @@
       if (saved.ui) {
         if (RANGES.some((r) => r.id === saved.ui.range)) state.ui.range = saved.ui.range;
         if (saved.ui.mode === 'return') state.ui.mode = 'return';
+        if (state.portfolios.some((p) => p.id === saved.ui.portfolio)) state.ui.portfolio = saved.ui.portfolio;
       }
       if (saved.version >= 2) {
         Object.assign(state.shared, saved.shared);
@@ -99,10 +102,10 @@
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 2, holdings: state.holdings, deleted: state.deleted, snapshots: state.snapshots,
+        version: 2, holdings: state.holdings, portfolios: state.portfolios, deleted: state.deleted, snapshots: state.snapshots,
         savedAt: state.savedAt, shared: state.shared, keys: state.keys, device: state.device,
         rates: state.rates, lastRefresh: state.lastRefresh, histories: state.histories,
-        ui: { range: state.ui.range, mode: state.ui.mode },
+        ui: { range: state.ui.range, mode: state.ui.mode, portfolio: state.ui.portfolio },
       }));
     } catch (err) {
       console.warn('Could not save data', err);
@@ -132,12 +135,14 @@
     if (includeKeys) settings.keys = { ...state.keys };
     return {
       app: 'investment-tracker', version: 2, savedAt: state.savedAt || '',
-      holdings: state.holdings, deleted: state.deleted, snapshots: state.snapshots, settings,
+      holdings: state.holdings, portfolios: state.portfolios, deleted: state.deleted, snapshots: state.snapshots, settings,
     };
   }
 
   function applyDoc(doc) {
     state.holdings = (doc.holdings || []).map(P.normalizeHolding);
+    state.portfolios = P.normalizePortfolios(doc.portfolios, state.holdings);
+    if (!state.portfolios.some((p) => p.id === state.ui.portfolio)) state.ui.portfolio = 'all';
     state.deleted = doc.deleted || {};
     state.snapshots = doc.snapshots || [];
     state.savedAt = doc.savedAt || state.savedAt;
@@ -291,15 +296,26 @@
   }
 
   // ---------- rendering ----------
-  function render() {
-    const has = state.holdings.length > 0;
-    $('#empty-state').hidden = has;
-    $('#dashboard').hidden = !has;
-    $('#btn-refresh').hidden = !has;
-    renderSyncStatus(syncing ? 'syncing' : undefined);
-    if (!has) return;
+  /** Holdings in the selected portfolio (or all of them). */
+  const visible = () => P.inPortfolio(state.holdings, state.ui.portfolio);
+  const portfolioName = (id) => (state.portfolios.find((p) => p.id === id) || { name: 'Portfolio' }).name;
 
-    const s = P.summarize(state.holdings, convert, base());
+  function render() {
+    const any = state.holdings.length > 0;
+    const multi = state.portfolios.length > 1;
+    const shown = visible();
+    $('#empty-state').hidden = any || multi;
+    $('#portfolio-bar').hidden = !(any || multi);
+    $('#empty-portfolio').hidden = !(any || multi) || shown.length > 0;
+    $('#empty-portfolio-title').textContent = state.ui.portfolio === 'all' ? 'No investments yet'
+      : `${portfolioName(state.ui.portfolio)} is empty`;
+    $('#dashboard').hidden = !shown.length;
+    $('#btn-refresh').hidden = !any;
+    renderSyncStatus(syncing ? 'syncing' : undefined);
+    renderPortfolioBar();
+    if (!shown.length) return;
+
+    const s = P.summarize(shown, convert, base());
     $('#stat-value').textContent = fmt.money(s.value);
     $('#stat-cost').textContent = `${fmt.money(s.cost)} invested`;
     const gainEl = $('#stat-gain');
@@ -318,12 +334,49 @@
       ? `⚠ ${s.unconverted} holding${s.unconverted === 1 ? ' is' : 's are'} left out of the totals because exchange rates to ${base()} haven't loaded yet. Refresh prices while online.`
       : '';
 
+    renderPortfolioOverview();
     renderAllocation($('#allocation'), s.allocation, fmt);
     renderPerformance();
     renderFilterOptions(s);
     renderTable(s);
     if (state.lastRefresh && !refreshing) setStatus(`Prices updated ${fmt.ago(state.lastRefresh)}`);
     if (state.ui.detailsId) renderDetails();
+  }
+
+  // ---------- portfolios ----------
+  function renderPortfolioBar() {
+    const sel = $('#portfolio-select');
+    const count = (id) => P.inPortfolio(state.holdings, id).length;
+    sel.innerHTML = `<option value="all">All portfolios (${state.holdings.length})</option>` +
+      state.portfolios.map((p) => `<option value="${p.id}">${escapeHTML(p.name)} (${count(p.id)})</option>`).join('');
+    sel.value = state.ui.portfolio;
+    const single = state.ui.portfolio === 'all';
+    $('#btn-rename-portfolio').hidden = single;
+    $('#btn-delete-portfolio').hidden = single;
+  }
+
+  /** In the combined view, one row per portfolio; click a row to open it. */
+  function renderPortfolioOverview() {
+    const show = state.ui.portfolio === 'all' && state.portfolios.length > 1;
+    $('#portfolio-overview').hidden = !show;
+    if (!show) return;
+    const total = P.summarize(state.holdings, convert, base()).value;
+    $('#portfolio-body').innerHTML = state.portfolios.map((p) => {
+      const s = P.summarize(P.inPortfolio(state.holdings, p.id), convert, base());
+      return `<tr data-portfolio="${p.id}" tabindex="0">
+        <td class="name">${escapeHTML(p.name)}</td>
+        <td class="num">${s.count}${s.closed ? ` <span class="muted">+${s.closed} sold</span>` : ''}</td>
+        <td class="num">${fmt.money(s.value)}</td>
+        <td class="num ${gainClass(s.gain)}">${fmt.signedMoney(s.gain)}<div class="sub ${gainClass(s.gain)}">${fmt.signedPct(s.gainPct)}</div></td>
+        <td class="num">${fmt.pct(total > 0 ? s.value / total : 0)}</td></tr>`;
+    }).join('');
+  }
+
+  function selectPortfolio(id) {
+    state.ui.portfolio = id === 'all' || state.portfolios.some((p) => p.id === id) ? id : 'all';
+    state.ui.category = 'all';
+    persist();
+    render();
   }
 
   // ---------- performance chart ----------
@@ -349,11 +402,11 @@
   let histMemo = { key: null, value: null };
   function fullHistory() {
     // Rebuilding is cheap, but render() runs on every keystroke in search.
-    const key = state.savedAt + '|' + base() + '|' + (state.rates && state.rates.fetchedAt) + '|' + historyVersion;
+    const key = state.savedAt + '|' + base() + '|' + (state.rates && state.rates.fetchedAt) + '|' + historyVersion + '|' + state.ui.portfolio;
     if (histMemo.key !== key) {
       histMemo = {
         key,
-        value: P.buildHistory(state.holdings, { histories: historiesById(), convert, base: base(), end: today() }),
+        value: P.buildHistory(visible(), { histories: historiesById(), convert, base: base(), end: today() }),
       };
     }
     return histMemo.value;
@@ -389,7 +442,7 @@
       emptyText: points.length ? 'Not enough history in this range yet.' : 'Add a transaction to see your history.',
     });
 
-    const est = P.buildHistory(state.holdings, { histories: historiesById(), convert, base: base(), start: from, end: today() }).estimated;
+    const est = P.buildHistory(visible(), { histories: historiesById(), convert, base: base(), start: from, end: today() }).estimated;
     const note = [];
     if (historyStatus) note.push(historyStatus);
     if (est.length) {
@@ -452,7 +505,7 @@
   }
 
   function renderPerformanceSafe() {
-    if (state.holdings.length && !$('#dashboard').hidden) renderPerformance();
+    if (visible().length && !$('#dashboard').hidden) renderPerformance();
   }
 
   function renderFilterOptions(s) {
@@ -475,11 +528,12 @@
   function renderTable(summary) {
     const { sort, asc, search, category, showClosed } = state.ui;
     const q = search.trim().toLowerCase();
-    const rows = state.holdings
+    const tagPortfolio = state.ui.portfolio === 'all' && state.portfolios.length > 1;
+    const rows = visible()
       .map((h) => ({ h, m: P.holdingMetrics(h, convert, base()) }))
       .filter(({ m }) => showClosed || !m.closed)
       .filter(({ h }) => category === 'all' || h.category === category)
-      .filter(({ h }) => !q || [h.name, h.subcategory, h.priceKey, h.notes, h.currency, P.categoryById(h.category).label]
+      .filter(({ h }) => !q || [h.name, h.subcategory, h.priceKey, h.notes, h.currency, P.categoryById(h.category).label, portfolioName(h.portfolioId)]
         .some((f) => f && f.toLowerCase().includes(q)));
 
     const key = {
@@ -515,7 +569,8 @@
       const realized = m.realized + m.income;
       return `<tr class="${m.closed ? 'closed' : ''}">
         <td><button class="name-link" data-details="${h.id}">${escapeHTML(h.name)}</button>${m.closed ? '<span class="badge">sold</span>' : ''}
-          ${h.subcategory ? `<div class="sub">${escapeHTML(h.subcategory)}</div>` : ''}</td>
+          ${h.subcategory ? `<div class="sub">${escapeHTML(h.subcategory)}</div>` : ''}
+          ${tagPortfolio ? `<span class="portfolio-tag">${escapeHTML(portfolioName(h.portfolioId))}</span>` : ''}</td>
         <td><span class="class-chip"><span class="swatch" style="background:var(--series-${cat.slot})"></span>${escapeHTML(cat.label)}</span></td>
         <td class="num">${fmt.qty(m.quantity)} <span class="muted">${escapeHTML(h.unit)}</span></td>
         <td class="num">${m.priced ? fmt.price(h.currentPrice, h.currency) : '<span class="muted">—</span>'}${priceNote(h)}</td>
@@ -657,6 +712,11 @@
     $('#holding-title').textContent = holding ? 'Edit investment' : 'Add investment';
     const h = holding || { category: 'stock', currency: base() };
     form.id.value = h.id || '';
+    const pSel = $('#holding-portfolio');
+    pSel.innerHTML = state.portfolios.map((p) => `<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('');
+    pSel.value = holding ? h.portfolioId
+      : state.ui.portfolio !== 'all' ? state.ui.portfolio : state.portfolios[0].id;
+    $('#portfolio-field').hidden = state.portfolios.length < 2;
     form.category.value = h.category;
     fillCurrencySelect(form.currency, h.currency);
     form.priceSource.innerHTML = '';
@@ -803,7 +863,7 @@
     const cur = h.currency;
     const cat = P.categoryById(h.category);
     $('#details-title').textContent = h.name;
-    $('#details-sub').textContent = [cat.label, h.subcategory, cur, P.SOURCES[h.priceSource].label + (h.priceKey ? ` (${h.priceKey})` : '')]
+    $('#details-sub').textContent = [state.portfolios.length > 1 ? portfolioName(h.portfolioId) : '', cat.label, h.subcategory, cur, P.SOURCES[h.priceSource].label + (h.priceKey ? ` (${h.priceKey})` : '')]
       .filter(Boolean).join(' · ');
     const stat = (k, v, cls = '') => `<div><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
     $('#details-stats').innerHTML = [
@@ -1024,7 +1084,7 @@
       // API keys stay out of backups so the file is safe to store or share.
       download(`investments-${today()}.json`, JSON.stringify(buildDoc({ includeKeys: false }), null, 2), 'application/json');
     } else if (action === 'export-csv') {
-      download(`holdings-${today()}.csv`, P.holdingsCSV(state.holdings, convert, base()), 'text/csv');
+      download(`holdings-${today()}.csv`, P.holdingsCSV(state.holdings, convert, base(), Object.fromEntries(state.portfolios.map((p) => [p.id, p.name]))), 'text/csv');
     } else if (action === 'export-tx-csv') {
       download(`transactions-${today()}.csv`, P.transactionsCSV(state.holdings), 'text/csv');
     } else if (action === 'import-json') {
@@ -1063,7 +1123,10 @@
       if (confirm('Delete every holding and all value history? If sync is on, this also clears them on your other devices.')) {
         const at = nowISO();
         for (const h of state.holdings) state.deleted[h.id] = at;
+        for (const p of state.portfolios) state.deleted[p.id] = at;
         state.holdings = [];
+        state.portfolios = P.normalizePortfolios([]);
+        state.ui.portfolio = 'all';
         state.snapshots = [];
         state.lastRefresh = null;
         commit();
@@ -1078,7 +1141,7 @@
     e.target.value = '';
     if (!file) return;
     try {
-      const { holdings, snapshots, skipped } = P.parseBackup(await file.text());
+      const { holdings, snapshots, skipped, portfolios } = P.parseBackup(await file.text());
       const replace = !state.holdings.length ||
         confirm(`Replace your current ${state.holdings.length} holdings with the ${holdings.length} in this file?\n\nChoose Cancel to add them alongside your existing holdings instead.`);
       if (replace) {
@@ -1092,6 +1155,11 @@
         state.holdings = [...state.holdings, ...holdings.filter((h) => !ids.has(h.id)).map(touch)];
       }
       for (const h of state.holdings) delete state.deleted[h.id];
+      state.portfolios = P.normalizePortfolios(
+        [...(replace ? [] : state.portfolios), ...portfolios.filter((p) => replace || !state.portfolios.some((q) => q.id === p.id))],
+        state.holdings);
+      for (const p of state.portfolios) delete state.deleted[p.id];
+      if (!state.portfolios.some((p) => p.id === state.ui.portfolio)) state.ui.portfolio = 'all';
       commit();
       settingsDialog.close();
       render();
@@ -1104,12 +1172,94 @@
   // ---------- sample data ----------
   async function loadSample() {
     state.holdings = P.sampleHoldings();
+    state.portfolios = P.samplePortfolios();
+    state.ui.portfolio = 'all';
     state.snapshots = [];
     await refreshRates(false);
     commit();
     render();
     refreshHistories();
   }
+
+  // ---------- portfolio dialog ----------
+  const pDialog = $('#portfolio-dialog');
+  const pForm = $('#portfolio-form');
+  let pMode = 'new';
+
+  function openPortfolioDialog(mode) {
+    const current = state.portfolios.find((p) => p.id === state.ui.portfolio);
+    if (mode !== 'new' && !current) return;
+    pMode = mode;
+    pForm.reset();
+    $('#portfolio-errors').textContent = '';
+    $('#portfolio-name-field').hidden = mode === 'delete';
+    $('#portfolio-delete-options').hidden = mode !== 'delete';
+    $('#portfolio-dialog-title').textContent = mode === 'new' ? 'New portfolio'
+      : mode === 'rename' ? 'Rename portfolio' : `Delete "${current.name}"`;
+    $('#portfolio-submit').textContent = mode === 'new' ? 'Create' : mode === 'rename' ? 'Rename' : 'Delete portfolio';
+    $('#portfolio-submit').classList.toggle('btn-danger', mode === 'delete');
+    $('#portfolio-submit').classList.toggle('btn-primary', mode !== 'delete');
+    if (mode === 'rename') $('#portfolio-name').value = current.name;
+    if (mode === 'delete') {
+      const n = P.inPortfolio(state.holdings, current.id).length;
+      const others = state.portfolios.filter((p) => p.id !== current.id);
+      $('#portfolio-delete-text').textContent = n
+        ? `It has ${n} holding${n === 1 ? '' : 's'}. What should happen to ${n === 1 ? 'it' : 'them'}?`
+        : 'It has no holdings.';
+      const moveLabel = pForm.querySelector('input[value="move"]').closest('label');
+      const delLabel = pForm.querySelector('input[value="delete"]').closest('label');
+      moveLabel.hidden = !n || !others.length;
+      delLabel.hidden = !n;
+      pForm.querySelector(`input[value="${others.length ? 'move' : 'delete'}"]`).checked = true;
+      $('#portfolio-move-target').innerHTML = others.map((p) => `<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('');
+    }
+    pDialog.showModal();
+    if (mode !== 'delete') $('#portfolio-name').focus();
+  }
+
+  pForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = $('#portfolio-name').value.trim();
+    const current = state.portfolios.find((p) => p.id === state.ui.portfolio);
+    if (pMode !== 'delete') {
+      if (!name) { $('#portfolio-errors').textContent = 'Give the portfolio a name.'; return; }
+      const clash = state.portfolios.some((p) => p.name.toLowerCase() === name.toLowerCase() && p !== current);
+      if (clash) { $('#portfolio-errors').textContent = 'You already have a portfolio with that name.'; return; }
+    }
+    if (pMode === 'new') {
+      const p = P.normalizePortfolio({ name });
+      state.portfolios = [...state.portfolios, p];
+      state.ui.portfolio = p.id;
+    } else if (pMode === 'rename') {
+      state.portfolios = state.portfolios.map((p) => (p === current ? { ...p, name, updatedAt: nowISO() } : p));
+    } else {
+      const at = nowISO();
+      const mode = pForm.querySelector('input[name="deleteMode"]:checked').value;
+      const target = $('#portfolio-move-target').value;
+      state.holdings = state.holdings.flatMap((h) => {
+        if (h.portfolioId !== current.id) return [h];
+        if (mode === 'move' && target) return [touch({ ...h, portfolioId: target })];
+        state.deleted[h.id] = at;
+        return [];
+      });
+      state.deleted[current.id] = at;
+      state.portfolios = P.normalizePortfolios(state.portfolios.filter((p) => p !== current), state.holdings);
+      state.ui.portfolio = 'all';
+    }
+    commit();
+    pDialog.close();
+    render();
+  });
+
+  $('#portfolio-select').addEventListener('change', (e) => selectPortfolio(e.target.value));
+  $('#portfolio-body').addEventListener('click', (e) => {
+    const row = e.target.closest('tr[data-portfolio]');
+    if (row) selectPortfolio(row.dataset.portfolio);
+  });
+  $('#portfolio-body').addEventListener('keydown', (e) => {
+    const row = e.target.closest('tr[data-portfolio]');
+    if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); selectPortfolio(row.dataset.portfolio); }
+  });
 
   // ---------- events ----------
   document.addEventListener('click', (e) => {
@@ -1118,6 +1268,10 @@
     if (t.matches('[data-close]')) t.closest('dialog').close();
     const d = t.dataset;
     if (d.action === 'add') openHoldingDialog();
+    if (d.action === 'show-all') selectPortfolio('all');
+    if (d.action === 'new-portfolio') openPortfolioDialog('new');
+    if (d.action === 'rename-portfolio') openPortfolioDialog('rename');
+    if (d.action === 'delete-portfolio') openPortfolioDialog('delete');
     if (d.action === 'sample') loadSample();
     if (d.action === 'settings') openSettings();
     if (d.details) openDetails(d.details);

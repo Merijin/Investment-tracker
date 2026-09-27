@@ -136,8 +136,8 @@ test('recordSnapshot keeps one point per day, sorted, with currency', () => {
 test('CSV exports escape values and list every transaction', () => {
   const h = holding({ name: 'Card, "Holo"', category: 'collectible', currentPrice: 12,
     transactions: [buy('2024-01-01', 2, 10), sell('2024-02-01', 1, 15, 1)] });
-  const csv = P.holdingsCSV([h], P.makeConverter({}), 'USD');
-  assert.ok(csv.split('\n')[1].startsWith('"Card, ""Holo""",Collectibles,'));
+  const csv = P.holdingsCSV([h], P.makeConverter({}), 'USD', { [P.DEFAULT_PORTFOLIO]: 'Main' });
+  assert.ok(csv.split('\n')[1].startsWith('Main,"Card, ""Holo""",Collectibles,'));
   const tx = P.transactionsCSV([h]).split('\n');
   assert.equal(tx.length, 3);
   assert.ok(tx[2].startsWith('2024-02-01,"Card, ""Holo""",Sell,1,15,1,,14,USD'));
@@ -238,4 +238,26 @@ test('ids from imported data are sanitised before reaching the page', () => {
   assert.match(h.id, /^h_[a-z0-9]+$/);
   assert.equal(h.transactions[0].id, 'ok_id-1');
   assert.match(h.transactions[1].id, /^t_[a-z0-9]+$/);
+});
+
+test('portfolios: defaults, filtering, and no orphaned holdings', () => {
+  const a = holding({ name: 'A' });
+  const b = holding({ name: 'B', portfolioId: 'p_kids' });
+  assert.equal(a.portfolioId, P.DEFAULT_PORTFOLIO);
+  assert.deepEqual(P.inPortfolio([a, b], 'p_kids').map((h) => h.name), ['B']);
+  assert.equal(P.inPortfolio([a, b], 'all').length, 2);
+  const list = P.normalizePortfolios([{ id: 'p_kids', name: "Kids savings" }], [a, b]);
+  assert.deepEqual(list.map((p) => p.id).sort(), [P.DEFAULT_PORTFOLIO, 'p_kids'].sort());
+  assert.equal(P.normalizePortfolios([]).length, 1);
+  assert.equal(P.normalizePortfolio({ name: '   ' }).name, 'Portfolio');
+  assert.match(P.normalizePortfolio({ id: '<script>' }).id, /^p_/);
+  const sample = P.sampleHoldings();
+  assert.ok(sample.some((h) => h.portfolioId !== P.DEFAULT_PORTFOLIO));
+  assert.deepEqual(P.samplePortfolios().map((p) => p.name), ['Long-term', 'Collection']);
+});
+
+test('parseBackup brings portfolios along', () => {
+  const r = P.parseBackup(JSON.stringify({ portfolios: [{ id: 'p_x', name: 'X' }], holdings: [{ name: 'H', portfolioId: 'p_x', quantity: 1, costBasis: 1 }] }));
+  assert.deepEqual(r.portfolios.map((p) => p.name), ['X']);
+  assert.equal(r.holdings[0].portfolioId, 'p_x');
 });

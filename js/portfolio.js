@@ -83,6 +83,9 @@
 
   const TX_TYPES = { buy: 'Buy', sell: 'Sell', income: 'Income' };
 
+  // Holdings from before portfolios existed belong to this one.
+  const DEFAULT_PORTFOLIO = 'p_default';
+
   function categoryById(id) {
     return CATEGORIES.find((c) => c.id === id) || CATEGORIES[CATEGORIES.length - 1];
   }
@@ -103,6 +106,38 @@
   function normCurrency(c, fallback = 'USD') {
     const s = String(c || '').trim().toUpperCase();
     return /^[A-Z]{3,5}$/.test(s) ? s : fallback;
+  }
+
+  function normalizePortfolio(raw) {
+    return {
+      id: raw.id ? safeId(raw.id, 'p') : newId('p'),
+      name: String(raw.name || '').trim().slice(0, 60) || 'Portfolio',
+      // '' marks an automatic placeholder, which any real name beats when syncing.
+      updatedAt: raw.updatedAt ?? new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The portfolio list, always including every portfolio a holding points at,
+   * so no holding can become unreachable (e.g. after a merge or an import).
+   */
+  function normalizePortfolios(list, holdings = []) {
+    const out = (Array.isArray(list) ? list : []).map(normalizePortfolio)
+      .filter((p, i, arr) => arr.findIndex((q) => q.id === p.id) === i);
+    const ids = new Set(out.map((p) => p.id));
+    for (const h of holdings) {
+      if (!ids.has(h.portfolioId)) {
+        out.push(normalizePortfolio({ id: h.portfolioId, name: h.portfolioId === DEFAULT_PORTFOLIO ? 'My portfolio' : 'Portfolio', updatedAt: '' }));
+        ids.add(h.portfolioId);
+      }
+    }
+    if (!out.length) out.push(normalizePortfolio({ id: DEFAULT_PORTFOLIO, name: 'My portfolio', updatedAt: '' }));
+    return out;
+  }
+
+  /** Holdings in one portfolio, or all of them for 'all'. */
+  function inPortfolio(holdings, portfolioId) {
+    return portfolioId === 'all' ? holdings : holdings.filter((h) => h.portfolioId === portfolioId);
   }
 
   function normalizeTransaction(raw) {
@@ -140,6 +175,7 @@
     }
     const holding = {
       id: safeId(raw.id, 'h'),
+      portfolioId: raw.portfolioId ? safeId(raw.portfolioId, 'p') : DEFAULT_PORTFOLIO,
       name: String(raw.name || '').trim(),
       category,
       subcategory: String(raw.subcategory || '').trim(),
@@ -360,13 +396,13 @@
     return rows.map((r) => r.map(csvCell).join(',')).join('\n');
   }
 
-  function holdingsCSV(holdings, convert, base) {
-    const header = ['Name', 'Category', 'Type', 'Currency', 'Quantity', 'Unit', 'Avg cost', 'Cost basis',
+  function holdingsCSV(holdings, convert, base, portfolioNames = {}) {
+    const header = ['Portfolio', 'Name', 'Category', 'Type', 'Currency', 'Quantity', 'Unit', 'Avg cost', 'Cost basis',
       'Current price', 'Value', 'Unrealized gain', 'Realized gain + income', `Value (${base})`,
       'Price source', 'Price key', 'Price updated', 'Notes'];
     const rows = holdings.map((h) => {
       const m = holdingMetrics(h, convert, base);
-      return [h.name, categoryById(h.category).label, h.subcategory, h.currency, m.quantity, h.unit,
+      return [portfolioNames[h.portfolioId] || '', h.name, categoryById(h.category).label, h.subcategory, h.currency, m.quantity, h.unit,
         round2(m.avgCost), round2(m.costBasis), h.currentPrice, round2(m.nativeValue), round2(m.nativeGain),
         round2(m.realized + m.income), m.fxMissing ? '' : round2(m.value), h.priceSource, h.priceKey,
         h.priceUpdatedAt, h.notes];
@@ -403,7 +439,8 @@
     const snapshots = Array.isArray(data.snapshots)
       ? data.snapshots.filter((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s.date) && Number.isFinite(s.value))
       : [];
-    return { holdings, snapshots, skipped: list.length - holdings.length };
+    const portfolios = normalizePortfolios(Array.isArray(data.portfolios) ? data.portfolios : [], holdings);
+    return { holdings, snapshots, portfolios, skipped: list.length - holdings.length };
   }
 
 
@@ -563,6 +600,13 @@
     return { pct: last.pct, gain: last.gain, from: slice[0].date };
   }
 
+  function samplePortfolios() {
+    return [
+      normalizePortfolio({ id: DEFAULT_PORTFOLIO, name: 'Long-term' }),
+      normalizePortfolio({ id: 'p_sample_collection', name: 'Collection' }),
+    ];
+  }
+
   function sampleHoldings() {
     const buy = (date, quantity, price, fees = 0) => ({ type: 'buy', date, quantity, price, fees });
     const sell = (date, quantity, price, fees = 0) => ({ type: 'sell', date, quantity, price, fees });
@@ -589,11 +633,15 @@
         transactions: [buy('2024-01-01', 7000, 1), buy('2024-06-01', 500, 1), income('2024-12-31', 210, 'Interest')] },
     ];
     const stamp = new Date().toISOString();
-    return raw.map((h) => normalizeHolding({ ...h, priceUpdatedAt: stamp }));
+    return raw.map((h) => normalizeHolding({
+      ...h, priceUpdatedAt: stamp,
+      portfolioId: h.category === 'collectible' ? 'p_sample_collection' : DEFAULT_PORTFOLIO,
+    }));
   }
 
   return {
     CATEGORIES, SOURCES, METALS, METAL_UNITS, GRAMS_PER_TROY_OUNCE, TX_TYPES,
+    DEFAULT_PORTFOLIO, normalizePortfolio, normalizePortfolios, inPortfolio, samplePortfolios,
     categoryById, toNumber, newId, normCurrency, normalizeHolding, normalizeTransaction,
     position, validateHolding, validateTransaction, metalPricePerUnit, makeConverter,
     holdingMetrics, summarize, recordSnapshot, holdingsCSV, transactionsCSV, parseBackup, sampleHoldings,
