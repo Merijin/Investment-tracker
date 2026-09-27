@@ -53,7 +53,7 @@
       const track = row.querySelector('.alloc-track');
       const html = `<div class="tt-title">${escapeHTML(a.label)} · ${a.count} holding${a.count === 1 ? '' : 's'}</div>
         <div class="tt-value">${fmt.money(a.value)}</div>
-        <div class="${a.gain >= 0 ? 'gain' : 'loss'}">${fmt.signedMoney(a.gain)} vs cost</div>`;
+        <div class="${a.gain >= 0 ? 'gain' : 'loss'}">${fmt.signedMoney(a.gain)} unrealized</div>`;
       track.addEventListener('mousemove', (e) => tooltip.show(html, e.clientX, e.clientY));
       track.addEventListener('mouseleave', () => tooltip.hide());
       container.appendChild(row);
